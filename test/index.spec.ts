@@ -8,7 +8,7 @@ import {
 	formatResponse,
 	generateBranchName,
 } from "../src/events";
-import type { Env } from "../src/types";
+import type { BonkConfig, Env } from "../src/types";
 import type {
 	IssueCommentEvent,
 	PullRequestReviewCommentEvent,
@@ -18,54 +18,64 @@ import type {
 import issueCommentFixture from "./fixtures/issue-comment.json";
 import prReviewCommentFixture from "./fixtures/pr-review-comment.json";
 
-// Mock env for testing
+// Mock config for testing
+const mockConfig: BonkConfig = {
+	botMention: "@ask-bonk",
+	botCommand: "/bonk",
+	model: "anthropic/claude-opus-4-5",
+};
+
+// Mock env for model tests
 const mockEnv: Env = {
 	Sandbox: {} as Env["Sandbox"],
 	GITHUB_APP_ID: "123",
 	GITHUB_APP_PRIVATE_KEY: "test-key",
 	GITHUB_WEBHOOK_SECRET: "test-secret",
 	ANTHROPIC_API_KEY: "test-api-key",
-	BOT_MENTION: "@ask-bonk",
-	BOT_COMMAND: "/bonk",
 	DEFAULT_MODEL: "anthropic/claude-opus-4-5",
 };
 
 describe("Mention Detection", () => {
 	it("detects @ask-bonk mention", () => {
-		expect(hasMention("@ask-bonk fix this", mockEnv)).toBe(true);
+		expect(hasMention("@ask-bonk fix this", mockConfig)).toBe(true);
 	});
 
 	it("detects /bonk command", () => {
-		expect(hasMention("/bonk fix this", mockEnv)).toBe(true);
+		expect(hasMention("/bonk fix this", mockConfig)).toBe(true);
 	});
 
 	it("detects mention in middle of text", () => {
-		expect(hasMention("hey @ask-bonk can you help", mockEnv)).toBe(true);
+		expect(hasMention("hey @ask-bonk can you help", mockConfig)).toBe(true);
 	});
 
 	it("does not match partial mentions", () => {
-		expect(hasMention("@ask-bonker", mockEnv)).toBe(false);
+		expect(hasMention("@ask-bonker", mockConfig)).toBe(false);
 	});
 
 	it("does not match without mention", () => {
-		expect(hasMention("please fix this bug", mockEnv)).toBe(false);
+		expect(hasMention("please fix this bug", mockConfig)).toBe(false);
 	});
 
 	it("works with custom bot mention", () => {
-		const customEnv = { ...mockEnv, BOT_MENTION: "@custom-bot" };
-		expect(hasMention("@custom-bot help", customEnv)).toBe(true);
-		expect(hasMention("/bonk help", customEnv)).toBe(true); // command still works
+		const customConfig: BonkConfig = { botMention: "@custom-bot" };
+		expect(hasMention("@custom-bot help", customConfig)).toBe(true);
+		expect(hasMention("/bonk help", customConfig)).toBe(true); // default command still works
+	});
+
+	it("works with default config", () => {
+		expect(hasMention("@ask-bonk help", {})).toBe(true);
+		expect(hasMention("/bonk help", {})).toBe(true);
 	});
 });
 
 describe("Prompt Extraction", () => {
 	it("extracts full prompt with mention", () => {
-		const prompt = extractPrompt("@ask-bonk fix the type error", mockEnv);
+		const prompt = extractPrompt("@ask-bonk fix the type error", mockConfig);
 		expect(prompt).toBe("@ask-bonk fix the type error");
 	});
 
 	it("returns default for bare mention", () => {
-		const prompt = extractPrompt("@ask-bonk", mockEnv);
+		const prompt = extractPrompt("@ask-bonk", mockConfig);
 		expect(prompt).toBe("Summarize this thread");
 	});
 
@@ -79,7 +89,7 @@ describe("Prompt Extraction", () => {
 			commitId: "abc123",
 			originalCommitId: "def456",
 		};
-		const prompt = extractPrompt("@ask-bonk improve this", mockEnv, reviewContext);
+		const prompt = extractPrompt("@ask-bonk improve this", mockConfig, reviewContext);
 		expect(prompt).toContain("src/utils.ts");
 		expect(prompt).toContain("line 5");
 	});
@@ -89,7 +99,7 @@ describe("Issue Comment Event Parsing", () => {
 	it("parses valid issue comment event", () => {
 		const result = parseIssueCommentEvent(
 			issueCommentFixture as unknown as IssueCommentEvent,
-			mockEnv
+			mockConfig
 		);
 
 		expect(result).not.toBeNull();
@@ -105,7 +115,7 @@ describe("Issue Comment Event Parsing", () => {
 		const payload = { ...issueCommentFixture, action: "deleted" };
 		const result = parseIssueCommentEvent(
 			payload as unknown as IssueCommentEvent,
-			mockEnv
+			mockConfig
 		);
 		expect(result).toBeNull();
 	});
@@ -117,7 +127,7 @@ describe("Issue Comment Event Parsing", () => {
 		};
 		const result = parseIssueCommentEvent(
 			payload as unknown as IssueCommentEvent,
-			mockEnv
+			mockConfig
 		);
 		expect(result).toBeNull();
 	});
@@ -127,7 +137,7 @@ describe("PR Review Comment Event Parsing", () => {
 	it("parses valid PR review comment event", () => {
 		const result = parsePRReviewCommentEvent(
 			prReviewCommentFixture as unknown as PullRequestReviewCommentEvent,
-			mockEnv
+			mockConfig
 		);
 
 		expect(result).not.toBeNull();
@@ -153,7 +163,7 @@ describe("PR Review Comment Event Parsing", () => {
 		};
 		const result = parsePRReviewCommentEvent(
 			forkPayload as unknown as PullRequestReviewCommentEvent,
-			mockEnv
+			mockConfig
 		);
 		expect(result).toBeNull();
 	});

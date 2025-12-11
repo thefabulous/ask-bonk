@@ -24,11 +24,24 @@ A GitHub bot powered by OpenCode that responds to mentions in issues and PRs. Ru
 
 ### 2. Configure Secrets
 
+**Important**: The private key must be in PKCS#8 format. GitHub generates keys in PKCS#1 format, so you need to convert it first:
+
+```bash
+# Convert the private key from PKCS#1 to PKCS#8
+openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt \
+  -in your-app-name.private-key.pem \
+  -out your-app-name.private-key.pkcs8.pem
+```
+
+Then set the secrets:
+
 ```bash
 wrangler secret put GITHUB_APP_ID
-wrangler secret put GITHUB_APP_PRIVATE_KEY
 wrangler secret put GITHUB_WEBHOOK_SECRET
 wrangler secret put ANTHROPIC_API_KEY
+
+# For the private key, use the converted PKCS#8 file
+cat your-app-name.private-key.pkcs8.pem | wrangler secret put GITHUB_APP_PRIVATE_KEY
 ```
 
 ### 3. Deploy
@@ -69,17 +82,27 @@ Create `.bonk/config.jsonc` in your repository root:
 ```jsonc
 {
   // Override the default model
-  "model": "anthropic/claude-sonnet-4-20250514"
+  "model": "anthropic/claude-sonnet-4-20250514",
+
+  // Customize bot triggers (optional)
+  "botMention": "@my-bot",
+  "botCommand": "/mybot"
 }
 ```
+
+### Configuration Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `model` | `anthropic/claude-opus-4-5` | LLM model to use |
+| `botMention` | `@ask-bonk` | Mention trigger |
+| `botCommand` | `/bonk` | Slash command trigger |
 
 ### Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `BOT_MENTION` | `@ask-bonk` | Mention trigger |
-| `BOT_COMMAND` | `/bonk` | Slash command trigger |
-| `DEFAULT_MODEL` | `anthropic/claude-opus-4-5` | Default LLM model |
+| `DEFAULT_MODEL` | `anthropic/claude-opus-4-5` | Fallback model when not configured per-repo |
 
 ## Supported Events
 

@@ -6,7 +6,7 @@ import type {
 	PullRequestReviewCommentEvent,
 	PullRequestReviewEvent,
 } from "@octokit/webhooks-types";
-import type { Env } from "./types";
+import type { BonkConfig, Env } from "./types";
 import {
 	createOctokit,
 	createGraphQL,
@@ -105,15 +105,24 @@ async function handleIssueComment(
 	payload: IssueCommentEvent,
 	env: Env
 ): Promise<void> {
-	const parsed = parseIssueCommentEvent(payload, env);
-	if (!parsed) return;
-
-	const { context, prompt, triggerCommentId } = parsed;
 	const installationId = payload.installation?.id;
 	if (!installationId) {
 		console.error("No installation ID in payload");
 		return;
 	}
+
+	// Fetch config to get mention patterns
+	const octokit = await createOctokit(env, installationId);
+	const bonkConfig = await getBonkConfig(
+		octokit,
+		payload.repository.owner.login,
+		payload.repository.name
+	);
+
+	const parsed = parseIssueCommentEvent(payload, bonkConfig);
+	if (!parsed) return;
+
+	const { context, prompt, triggerCommentId } = parsed;
 
 	await processRequest({
 		env,
@@ -121,6 +130,7 @@ async function handleIssueComment(
 		context,
 		prompt,
 		triggerCommentId,
+		bonkConfig,
 	});
 }
 
@@ -128,15 +138,25 @@ async function handlePRReviewComment(
 	payload: PullRequestReviewCommentEvent,
 	env: Env
 ): Promise<void> {
-	const parsed = parsePRReviewCommentEvent(payload, env);
-	if (!parsed) return;
-
-	const { context, prompt, triggerCommentId } = parsed;
 	const installationId = payload.installation?.id;
 	if (!installationId) {
 		console.error("No installation ID in payload");
 		return;
 	}
+
+	// Fetch config to get mention patterns
+	const octokit = await createOctokit(env, installationId);
+	const bonkConfig = await getBonkConfig(
+		octokit,
+		payload.repository.owner.login,
+		payload.repository.name,
+		payload.pull_request.head.ref
+	);
+
+	const parsed = parsePRReviewCommentEvent(payload, bonkConfig);
+	if (!parsed) return;
+
+	const { context, prompt, triggerCommentId } = parsed;
 
 	await processRequest({
 		env,
@@ -144,6 +164,7 @@ async function handlePRReviewComment(
 		context,
 		prompt,
 		triggerCommentId,
+		bonkConfig,
 	});
 }
 
@@ -151,15 +172,25 @@ async function handlePRReview(
 	payload: PullRequestReviewEvent,
 	env: Env
 ): Promise<void> {
-	const parsed = parsePRReviewEvent(payload, env);
-	if (!parsed) return;
-
-	const { context, prompt, triggerCommentId } = parsed;
 	const installationId = payload.installation?.id;
 	if (!installationId) {
 		console.error("No installation ID in payload");
 		return;
 	}
+
+	// Fetch config to get mention patterns
+	const octokit = await createOctokit(env, installationId);
+	const bonkConfig = await getBonkConfig(
+		octokit,
+		payload.repository.owner.login,
+		payload.repository.name,
+		payload.pull_request.head.ref
+	);
+
+	const parsed = parsePRReviewEvent(payload, bonkConfig);
+	if (!parsed) return;
+
+	const { context, prompt, triggerCommentId } = parsed;
 
 	await processRequest({
 		env,
@@ -167,6 +198,7 @@ async function handlePRReview(
 		context,
 		prompt,
 		triggerCommentId,
+		bonkConfig,
 	});
 }
 
@@ -188,6 +220,7 @@ interface ProcessRequestParams {
 	};
 	prompt: string;
 	triggerCommentId: number;
+	bonkConfig: BonkConfig;
 }
 
 async function processRequest({
@@ -196,6 +229,7 @@ async function processRequest({
 	context,
 	prompt,
 	triggerCommentId,
+	bonkConfig,
 }: ProcessRequestParams): Promise<void> {
 	const octokit = await createOctokit(env, installationId);
 	const gql = await createGraphQL(env, installationId);
@@ -227,14 +261,6 @@ async function processRequest({
 			octokit,
 			context.owner,
 			context.repo
-		);
-
-		// Get repo config
-		const bonkConfig = await getBonkConfig(
-			octokit,
-			context.owner,
-			context.repo,
-			context.headBranch ?? context.defaultBranch
 		);
 
 		// Get model configuration

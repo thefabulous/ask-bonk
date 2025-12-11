@@ -3,12 +3,16 @@ import type {
 	PullRequestReviewCommentEvent,
 	PullRequestReviewEvent,
 } from "@octokit/webhooks-types";
-import type { Env, EventContext, ReviewCommentContext } from "./types";
+import type { BonkConfig, Env, EventContext, ReviewCommentContext } from "./types";
+
+// Default mention patterns
+const DEFAULT_BOT_MENTION = "@ask-bonk";
+const DEFAULT_BOT_COMMAND = "/bonk";
 
 // Configurable mention patterns
-function getMentionPattern(env: Env): RegExp {
-	const mention = env.BOT_MENTION ?? "@ask-bonk";
-	const command = env.BOT_COMMAND ?? "/bonk";
+function getMentionPattern(config: BonkConfig): RegExp {
+	const mention = config.botMention ?? DEFAULT_BOT_MENTION;
+	const command = config.botCommand ?? DEFAULT_BOT_COMMAND;
 	// Escape special regex characters in the mention/command
 	const escapedMention = mention.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 	const escapedCommand = command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -16,18 +20,18 @@ function getMentionPattern(env: Env): RegExp {
 }
 
 // Check if a comment body contains a mention
-export function hasMention(body: string, env: Env): boolean {
-	return getMentionPattern(env).test(body.trim());
+export function hasMention(body: string, config: BonkConfig = {}): boolean {
+	return getMentionPattern(config).test(body.trim());
 }
 
 // Extract the prompt from comment body (everything after the mention)
 export function extractPrompt(
 	body: string,
-	env: Env,
+	config: BonkConfig = {},
 	reviewContext?: ReviewCommentContext
 ): string {
-	const mention = env.BOT_MENTION ?? "@ask-bonk";
-	const command = env.BOT_COMMAND ?? "/bonk";
+	const mention = config.botMention ?? DEFAULT_BOT_MENTION;
+	const command = config.botCommand ?? DEFAULT_BOT_COMMAND;
 	const trimmed = body.trim();
 
 	// If body is just the mention/command, provide default behavior
@@ -77,7 +81,7 @@ export function isForkPR(payload: IssueCommentEvent | PullRequestReviewCommentEv
 // Parse issue_comment event
 export function parseIssueCommentEvent(
 	payload: IssueCommentEvent,
-	env: Env
+	config: BonkConfig = {}
 ): {
 	context: Omit<EventContext, "env">;
 	prompt: string;
@@ -89,7 +93,7 @@ export function parseIssueCommentEvent(
 	}
 
 	// Check for mention
-	if (!hasMention(payload.comment.body, env)) {
+	if (!hasMention(payload.comment.body, config)) {
 		return null;
 	}
 
@@ -106,7 +110,7 @@ export function parseIssueCommentEvent(
 			isPrivate: payload.repository.private,
 			defaultBranch: payload.repository.default_branch,
 		},
-		prompt: extractPrompt(payload.comment.body, env),
+		prompt: extractPrompt(payload.comment.body, config),
 		triggerCommentId: payload.comment.id,
 	};
 }
@@ -114,7 +118,7 @@ export function parseIssueCommentEvent(
 // Parse pull_request_review_comment event
 export function parsePRReviewCommentEvent(
 	payload: PullRequestReviewCommentEvent,
-	env: Env
+	config: BonkConfig = {}
 ): {
 	context: Omit<EventContext, "env">;
 	prompt: string;
@@ -127,7 +131,7 @@ export function parsePRReviewCommentEvent(
 	}
 
 	// Check for mention
-	if (!hasMention(payload.comment.body, env)) {
+	if (!hasMention(payload.comment.body, config)) {
 		return null;
 	}
 
@@ -152,7 +156,7 @@ export function parsePRReviewCommentEvent(
 			headSha: payload.pull_request.head.sha,
 			isFork: false,
 		},
-		prompt: extractPrompt(payload.comment.body, env, reviewContext),
+		prompt: extractPrompt(payload.comment.body, config, reviewContext),
 		triggerCommentId: payload.comment.id,
 		reviewContext,
 	};
@@ -161,7 +165,7 @@ export function parsePRReviewCommentEvent(
 // Parse pull_request_review event
 export function parsePRReviewEvent(
 	payload: PullRequestReviewEvent,
-	env: Env
+	config: BonkConfig = {}
 ): {
 	context: Omit<EventContext, "env">;
 	prompt: string;
@@ -173,7 +177,7 @@ export function parsePRReviewEvent(
 	}
 
 	// Check for mention in review body
-	if (!payload.review.body || !hasMention(payload.review.body, env)) {
+	if (!payload.review.body || !hasMention(payload.review.body, config)) {
 		return null;
 	}
 
@@ -196,7 +200,7 @@ export function parsePRReviewEvent(
 			headSha: payload.pull_request.head.sha,
 			isFork: false,
 		},
-		prompt: extractPrompt(payload.review.body, env),
+		prompt: extractPrompt(payload.review.body, config),
 		triggerCommentId: payload.review.id,
 	};
 }

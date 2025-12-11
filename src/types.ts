@@ -7,14 +7,14 @@ export interface Env {
 	GITHUB_APP_PRIVATE_KEY: string;
 	GITHUB_WEBHOOK_SECRET: string;
 	ANTHROPIC_API_KEY: string;
-	BOT_MENTION?: string;
-	BOT_COMMAND?: string;
 	DEFAULT_MODEL?: string;
 }
 
 // Repository configuration from .bonk/config.jsonc
 export interface BonkConfig {
 	model?: string;
+	botMention?: string;
+	botCommand?: string;
 }
 
 // Context passed through event handling

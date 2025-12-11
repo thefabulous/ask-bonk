@@ -17,7 +17,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install global Node.js tools (cached layer)
 RUN npm install -g \
-    @opencode-ai/cli \
     typescript \
     tsx \
     && npm cache clean --force
