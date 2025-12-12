@@ -17,14 +17,14 @@
 		// - "github_workflow": Trigger GitHub Actions workflow in target repo
 		"BONK_MODE": "github_workflow",
 	},
-	"containers": [
-		{
-			"class_name": "Sandbox",
-			"image": "./Dockerfile",
-			"instance_type": "standard-2",
-			"max_instances": 10,
-		},
-	],
+	// "containers": [
+	// 	{
+	// 		"class_name": "Sandbox",
+	// 		"image": "./Dockerfile",
+	// 		"instance_type": "standard-2",
+	// 		"max_instances": 10,
+	// 	},
+	// ],
 	"durable_objects": {
 		"bindings": [
 			{
