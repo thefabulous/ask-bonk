@@ -74,9 +74,10 @@ jobs:
       - name: Run Bonk
         uses: sst/opencode/github@latest
         env:
-          OPENCODE_API_KEY: \${{ secrets.OPENCODE_API_KEY }}
+          ANTHROPIC_API_KEY: \${{ secrets.ANTHROPIC_API_KEY }}
         with:
-          model: opencode/claude-sonnet-4-20250514
+          model: anthropic/claude-sonnet-4-20250514
+          token: \${{ secrets.GITHUB_TOKEN }}
 `;
 }
 
@@ -232,8 +233,8 @@ After merging, ensure the following secret is set in your repository:
 
 1. Go to **Settings** > **Secrets and variables** > **Actions**
 2. Add a new repository secret:
-   - **Name**: \`OPENCODE_API_KEY\`
-   - **Value**: Your OpenCode API key (get one at https://opencode.ai/)
+   - **Name**: \`ANTHROPIC_API_KEY\`
+   - **Value**: Your Anthropic API key (get one at https://console.anthropic.com/)
 
 ## Usage
 
@@ -267,7 +268,7 @@ Or use the slash command:
 		owner,
 		repo,
 		responseCommentId,
-		`I noticed the workflow file is missing. I've created a PR to add it: #${prNumber}\n\nOnce merged and configured with your \`OPENCODE_API_KEY\` secret, mention me again!\n\n${prUrl}`
+		`I noticed the workflow file is missing. I've created a PR to add it: #${prNumber}\n\nOnce merged and configured with your \`ANTHROPIC_API_KEY\` secret, mention me again!\n\n${prUrl}`
 	);
 
 	return {

@@ -15,7 +15,6 @@ import * as readline from "readline";
 const WORKFLOW_FILE_PATH = ".github/workflows/bonk.yml";
 const WORKFLOW_BRANCH = "bonk/add-workflow-file";
 const DEPLOY_BUTTON_URL = "https://deploy.workers.cloudflare.com/?url=https://github.com/elithrar/ask-bonk";
-const GITHUB_APP_URL = "https://github.com/apps/ask-bonk";
 
 // ANSI colors
 const colors = {
@@ -332,9 +331,10 @@ jobs:
       - name: Run Bonk
         uses: sst/opencode/github@latest
         env:
-          OPENCODE_API_KEY: \${{ secrets.OPENCODE_API_KEY }}
+          ANTHROPIC_API_KEY: \${{ secrets.ANTHROPIC_API_KEY }}
         with:
-          model: opencode/claude-sonnet-4-20250514
+          model: anthropic/claude-sonnet-4-20250514
+          token: \${{ secrets.GITHUB_TOKEN }}
 `;
 }
 
@@ -356,9 +356,6 @@ function openUrl(url: string): boolean {
 		return false;
 	}
 }
-
-// Track whether user confirmed app installation
-let appInstallationConfirmed = false;
 
 async function main() {
 	log(`\n${colors.bold}${colors.cyan}Bonk GitHub Install${colors.reset}`);
@@ -411,37 +408,6 @@ async function main() {
 		process.exit(1);
 	}
 
-	// Step 1: GitHub App Installation
-	logStep("GitHub App Installation");
-	log("The ask-bonk GitHub App must be installed to receive webhook events.");
-	log(`\nInstall/configure the app at: ${colors.cyan}${GITHUB_APP_URL}${colors.reset}`);
-	log(`Make sure to grant access to: ${colors.bold}${targetRepo}${colors.reset}\n`);
-
-	const alreadyInstalled = await prompt("Is the ask-bonk app already installed on this repo? (y/n)", "n");
-	
-	if (alreadyInstalled.toLowerCase() === "y") {
-		logSuccess("GitHub App installation confirmed");
-		appInstallationConfirmed = true;
-	} else {
-		const openApp = await prompt("Open GitHub App installation page? (y/n)", "y");
-		if (openApp.toLowerCase() === "y") {
-			openUrl(GITHUB_APP_URL);
-		}
-
-		log(`\n${colors.yellow}After installing the app and granting access to ${targetRepo}, press Enter to continue...${colors.reset}`);
-		await prompt("");
-		
-		const confirmed = await prompt("Did you install and configure the app? (y/n)", "y");
-		appInstallationConfirmed = confirmed.toLowerCase() === "y";
-		
-		if (appInstallationConfirmed) {
-			logSuccess("GitHub App installation confirmed");
-		} else {
-			logWarn("Continuing without app installation confirmation...");
-			log(`You must install the app for Bonk to work: ${GITHUB_APP_URL}`);
-		}
-	}
-
 	// Check if workflow already exists
 	if (workflowExists(targetRepo)) {
 		logWarn(`Workflow file already exists at ${WORKFLOW_FILE_PATH}`);
@@ -453,18 +419,18 @@ async function main() {
 
 	// Get API key
 	logStep("API Key Configuration");
-	log("Bonk requires an OpenCode API key to function.");
-	log(`${colors.dim}Get one at: https://opencode.ai/${colors.reset}\n`);
+	log("Bonk requires an Anthropic API key to function.");
+	log(`${colors.dim}Get one at: https://console.anthropic.com/${colors.reset}\n`);
 
-	const apiKey = await promptSecret("Enter OPENCODE_API_KEY");
+	const apiKey = await promptSecret("Enter ANTHROPIC_API_KEY");
 
 	if (!apiKey) {
-		logWarn("No API key provided. You'll need to set OPENCODE_API_KEY manually.");
+		logWarn("No API key provided. You'll need to set ANTHROPIC_API_KEY manually.");
 	} else {
 		// Set secret
 		logInfo("Setting repository secret...");
-		if (setSecret(targetRepo, "OPENCODE_API_KEY", apiKey)) {
-			logSuccess("OPENCODE_API_KEY secret set successfully");
+		if (setSecret(targetRepo, "ANTHROPIC_API_KEY", apiKey)) {
+			logSuccess("ANTHROPIC_API_KEY secret set successfully");
 		} else {
 			logError("Failed to set secret. You may need to set it manually.");
 			log(`\nGo to: https://github.com/${targetRepo}/settings/secrets/actions`);
@@ -512,7 +478,7 @@ This PR adds the Bonk GitHub Action workflow to enable \`@ask-bonk\` / \`/bonk\`
 
 ## Setup
 
-${apiKey ? "The `OPENCODE_API_KEY` secret has been configured." : "**Action Required**: Set the `OPENCODE_API_KEY` secret in repository settings."}
+${apiKey ? "The `ANTHROPIC_API_KEY` secret has been configured." : "**Action Required**: Set the `ANTHROPIC_API_KEY` secret in repository settings."}
 
 ## Usage
 
@@ -549,14 +515,10 @@ Or use the slash command:
 	log("Next steps:");
 	let stepNum = 1;
 
-	if (!appInstallationConfirmed) {
-		log(`  ${stepNum++}. Install the ask-bonk GitHub App: ${GITHUB_APP_URL}`);
-	}
-
 	log(`  ${stepNum++}. Review and merge the PR`);
 
 	if (!apiKey) {
-		log(`  ${stepNum++}. Set OPENCODE_API_KEY in repository secrets`);
+		log(`  ${stepNum++}. Set ANTHROPIC_API_KEY in repository secrets`);
 	}
 
 	log(`  ${stepNum++}. Mention @ask-bonk or /bonk in an issue or PR`);

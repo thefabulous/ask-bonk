@@ -1,4 +1,4 @@
-import { Actor } from "@cloudflare/actors";
+import { Actor, Persist } from "@cloudflare/actors";
 import type { Octokit } from "@octokit/rest";
 import type { Env } from "../types";
 import { createOctokit, getWorkflowRunStatus, updateComment } from "../github";
@@ -14,6 +14,9 @@ export interface PendingRun {
 	createdAt: number;
 	pollAttempts: number;
 }
+
+/** Map of commentId (as string) -> PendingRun stored as plain object for serialization */
+type PendingRunsMap = Record<string, PendingRun>;
 
 const POLL_INTERVAL_MS = 30_000; // 30 seconds
 const DEFAULT_MAX_TRACKING_TIME_MS = 30 * 60 * 1000; // 30 minutes
@@ -33,9 +36,9 @@ export class RepoActor extends Actor<Env> {
 	private repo: string;
 	private maxTrackingTimeMs: number = DEFAULT_MAX_TRACKING_TIME_MS;
 
-	// Persisted state
-	installationId: number = 0;
-	pendingRuns: Map<number, PendingRun> = new Map();
+	// Persisted state - use @Persist decorator and plain objects (not Map) for serialization
+	@Persist installationId: number = 0;
+	@Persist pendingRuns: PendingRunsMap = {};
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
@@ -68,14 +71,16 @@ export class RepoActor extends Actor<Env> {
 		const logPrefix = `[${this.owner}/${this.repo}]`;
 		console.info(`${logPrefix} Tracking run ${runId} for comment ${commentId}`);
 
-		this.pendingRuns.set(commentId, {
+		// Use string key for plain object storage
+		const key = String(commentId);
+		this.pendingRuns[key] = {
 			runId,
 			runUrl,
 			commentId,
 			issueNumber,
 			createdAt: Date.now(),
 			pollAttempts: 0,
-		});
+		};
 
 		// Schedule alarm if not already set
 		const currentAlarm = await this.ctx.storage.getAlarm();
@@ -88,15 +93,16 @@ export class RepoActor extends Actor<Env> {
 	/**
 	 * Alarm handler - called periodically to check workflow run status
 	 */
-	async alarm(): Promise<void> {
+	override async onAlarm(): Promise<void> {
 		const logPrefix = `[${this.owner}/${this.repo}]`;
 
-		if (this.pendingRuns.size === 0) {
+		const pendingKeys = Object.keys(this.pendingRuns);
+		if (pendingKeys.length === 0) {
 			console.info(`${logPrefix} No pending runs, skipping alarm`);
 			return;
 		}
 
-		console.info(`${logPrefix} Alarm fired, checking ${this.pendingRuns.size} pending runs`);
+		console.info(`${logPrefix} Alarm fired, checking ${pendingKeys.length} pending runs`);
 
 		let octokit: Octokit;
 		try {
@@ -110,14 +116,17 @@ export class RepoActor extends Actor<Env> {
 
 		const now = Date.now();
 
-		for (const [commentId, run] of this.pendingRuns) {
+		for (const key of pendingKeys) {
+			const run = this.pendingRuns[key];
+			if (!run) continue;
+
 			const elapsed = now - run.createdAt;
 
 			// Check if we've exceeded max tracking time
 			if (elapsed > this.maxTrackingTimeMs) {
 				console.warn(`${logPrefix} Run ${run.runId} timed out after ${elapsed}ms`);
 				await this.updateCommentWithTimeout(octokit, run);
-				this.pendingRuns.delete(commentId);
+				delete this.pendingRuns[key];
 				continue;
 			}
 
@@ -133,7 +142,7 @@ export class RepoActor extends Actor<Env> {
 
 				if (status.status === "completed") {
 					await this.updateCommentWithResult(octokit, run, status.conclusion);
-					this.pendingRuns.delete(commentId);
+					delete this.pendingRuns[key];
 				} else {
 					run.pollAttempts++;
 				}
@@ -148,8 +157,9 @@ export class RepoActor extends Actor<Env> {
 		}
 
 		// Schedule next alarm if there are still pending runs
-		if (this.pendingRuns.size > 0) {
-			console.info(`${logPrefix} ${this.pendingRuns.size} runs still pending, scheduling next alarm`);
+		const remainingKeys = Object.keys(this.pendingRuns);
+		if (remainingKeys.length > 0) {
+			console.info(`${logPrefix} ${remainingKeys.length} runs still pending, scheduling next alarm`);
 			await this.ctx.storage.setAlarm(Date.now() + POLL_INTERVAL_MS);
 		} else {
 			console.info(`${logPrefix} All runs completed, no more alarms needed`);
