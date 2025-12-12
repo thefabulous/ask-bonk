@@ -47,4 +47,10 @@
 			"tag": "v2",
 		},
 	],
+	"kv_namespaces": [
+		{
+			"binding": "APP_INSTALLATIONS",
+			"id": "03ef4765c3824caf9fb9b8ac31584f38",
+		},
+	],
 }

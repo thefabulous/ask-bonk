@@ -75,6 +75,16 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
 
 	console.info(`Webhook: ${getWebhookLogContext(event)}`);
 
+	// Store installation ID in KV for token exchange
+	const payload = event.payload as Record<string, unknown>;
+	const installation = payload.installation as { id?: number } | undefined;
+	const repository = payload.repository as { owner?: { login?: string }; name?: string } | undefined;
+	if (installation?.id && repository?.owner?.login && repository?.name) {
+		const repoKey = `${repository.owner.login}/${repository.name}`;
+		await env.APP_INSTALLATIONS.put(repoKey, String(installation.id));
+		console.info(`Stored installation ${installation.id} for ${repoKey}`);
+	}
+
 	// Handle supported events
 	try {
 		switch (event.name) {

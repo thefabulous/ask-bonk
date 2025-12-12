@@ -61,7 +61,6 @@ jobs:
       )
     runs-on: ubuntu-latest
     permissions:
-      id-token: write
       contents: write
       issues: write
       pull-requests: write
@@ -75,9 +74,10 @@ jobs:
         uses: sst/opencode/github@latest
         env:
           ANTHROPIC_API_KEY: \${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: \${{ github.token }}
         with:
           model: anthropic/claude-sonnet-4-20250514
-          token: \${{ secrets.GITHUB_TOKEN }}
+          use_github_token: true
 `;
 }
 

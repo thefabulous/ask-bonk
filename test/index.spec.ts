@@ -21,6 +21,8 @@ import prReviewCommentFixture from "./fixtures/pr-review-comment.json";
 // Mock env for model tests
 const mockEnv: Env = {
 	Sandbox: {} as Env["Sandbox"],
+	REPO_ACTOR: {} as Env["REPO_ACTOR"],
+	APP_INSTALLATIONS: {} as Env["APP_INSTALLATIONS"],
 	GITHUB_APP_ID: "123",
 	GITHUB_APP_PRIVATE_KEY: "test-key",
 	GITHUB_WEBHOOK_SECRET: "test-secret",

@@ -8,6 +8,7 @@ export type BonkMode = "sandbox_sdk" | "github_workflow";
 export interface Env {
 	Sandbox: DurableObjectNamespace<Sandbox>;
 	REPO_ACTOR: DurableObjectNamespace<RepoActor>;
+	APP_INSTALLATIONS: KVNamespace;
 	GITHUB_APP_ID: string;
 	GITHUB_APP_PRIVATE_KEY: string;
 	GITHUB_WEBHOOK_SECRET: string;
