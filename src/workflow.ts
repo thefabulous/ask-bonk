@@ -53,9 +53,12 @@ on:
 jobs:
   bonk:
     if: |
-      (github.event_name == 'issue_comment' && (contains(github.event.comment.body, '${BOT_MENTION}') || contains(github.event.comment.body, '${BOT_COMMAND}'))) ||
-      (github.event_name == 'pull_request_review_comment' && (contains(github.event.comment.body, '${BOT_MENTION}') || contains(github.event.comment.body, '${BOT_COMMAND}'))) ||
-      (github.event_name == 'pull_request_review' && (contains(github.event.review.body, '${BOT_MENTION}') || contains(github.event.review.body, '${BOT_COMMAND}')))
+      github.event.sender.type != 'Bot' &&
+      (
+        (github.event_name == 'issue_comment' && (contains(github.event.comment.body, '${BOT_MENTION}') || contains(github.event.comment.body, '${BOT_COMMAND}'))) ||
+        (github.event_name == 'pull_request_review_comment' && (contains(github.event.comment.body, '${BOT_MENTION}') || contains(github.event.comment.body, '${BOT_COMMAND}'))) ||
+        (github.event_name == 'pull_request_review' && (contains(github.event.review.body, '${BOT_MENTION}') || contains(github.event.review.body, '${BOT_COMMAND}')))
+      )
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -71,9 +74,9 @@ jobs:
       - name: Run Bonk
         uses: sst/opencode/github@latest
         env:
-          ANTHROPIC_API_KEY: \${{ secrets.ANTHROPIC_API_KEY }}
+          OPENCODE_API_KEY: \${{ secrets.OPENCODE_API_KEY }}
         with:
-          model: anthropic/claude-sonnet-4-20250514
+          model: opencode/claude-sonnet-4-20250514
 `;
 }
 
@@ -229,8 +232,8 @@ After merging, ensure the following secret is set in your repository:
 
 1. Go to **Settings** > **Secrets and variables** > **Actions**
 2. Add a new repository secret:
-   - **Name**: \`ANTHROPIC_API_KEY\`
-   - **Value**: Your Anthropic API key
+   - **Name**: \`OPENCODE_API_KEY\`
+   - **Value**: Your OpenCode API key (get one at https://opencode.ai/)
 
 ## Usage
 
@@ -264,7 +267,7 @@ Or use the slash command:
 		owner,
 		repo,
 		responseCommentId,
-		`I noticed the workflow file is missing. I've created a PR to add it: #${prNumber}\n\nOnce merged and configured with your \`ANTHROPIC_API_KEY\` secret, mention me again!\n\n${prUrl}`
+		`I noticed the workflow file is missing. I've created a PR to add it: #${prNumber}\n\nOnce merged and configured with your \`OPENCODE_API_KEY\` secret, mention me again!\n\n${prUrl}`
 	);
 
 	return {
