@@ -61,6 +61,7 @@ jobs:
       )
     runs-on: ubuntu-latest
     permissions:
+      id-token: write
       contents: write
       issues: write
       pull-requests: write
