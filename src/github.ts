@@ -363,25 +363,6 @@ export async function fileExists(
 	}
 }
 
-// Get file content from repository
-export async function getFileContent(
-	octokit: Octokit,
-	owner: string,
-	repo: string,
-	path: string,
-	ref?: string
-): Promise<string | null> {
-	try {
-		const response = await octokit.repos.getContent({ owner, repo, path, ref });
-		if ("content" in response.data) {
-			return atob(response.data.content);
-		}
-		return null;
-	} catch {
-		return null;
-	}
-}
-
 // Get default branch SHA
 export async function getDefaultBranchSha(
 	octokit: Octokit,
@@ -456,24 +437,6 @@ export async function findOpenPR(
 		};
 	}
 	return null;
-}
-
-// Trigger a workflow dispatch event
-export async function triggerWorkflowDispatch(
-	octokit: Octokit,
-	owner: string,
-	repo: string,
-	workflowId: string,
-	ref: string,
-	inputs: Record<string, string>
-): Promise<void> {
-	await octokit.actions.createWorkflowDispatch({
-		owner,
-		repo,
-		workflow_id: workflowId,
-		ref,
-		inputs,
-	});
 }
 
 // Build context prompt for a PR

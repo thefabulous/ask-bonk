@@ -1,7 +1,7 @@
 import { Actor, Persist } from '@cloudflare/actors';
 import type { Schedule } from '@cloudflare/actors/alarms';
-import type { Env } from '../types';
-import { createOctokit, getWorkflowRunStatus, updateComment } from '../github';
+import type { Env } from './types';
+import { createOctokit, getWorkflowRunStatus, updateComment } from './github';
 
 /**
  * Payload for the checkWorkflowStatus scheduled callback
