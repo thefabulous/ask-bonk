@@ -1,0 +1,39 @@
+name: Bonk
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  bonk:
+    if: |
+      github.event.sender.type != 'Bot' &&
+      (
+        (github.event_name == 'issue_comment' && (contains(github.event.comment.body, '{{BOT_MENTION}}') || contains(github.event.comment.body, '{{BOT_COMMAND}}'))) ||
+        (github.event_name == 'pull_request_review_comment' && (contains(github.event.comment.body, '{{BOT_MENTION}}') || contains(github.event.comment.body, '{{BOT_COMMAND}}'))) ||
+        (github.event_name == 'pull_request_review' && (contains(github.event.review.body, '{{BOT_MENTION}}') || contains(github.event.review.body, '{{BOT_COMMAND}}')))
+      )
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Bonk
+        uses: sst/opencode/github@latest
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          model: {{MODEL}}
+          use_github_token: true
