@@ -8,7 +8,7 @@ import {
 	verifyWebhook,
 	hasWriteAccess,
 	createComment,
-	createReaction,
+	updateComment,
 	createPullRequest,
 	getRepository,
 	fetchIssue,
@@ -16,11 +16,13 @@ import {
 	buildIssueContext,
 	buildPRContext,
 	getInstallationToken,
-} from "./github";
+	createReaction,
+} from './github';
 import { parseIssueCommentEvent, parsePRReviewCommentEvent, parsePRReviewEvent, getModel, formatResponse } from './events';
 import { extractImages } from './images';
 import { runOpencodeSandbox, type SandboxResult } from './sandbox';
 import { runWorkflowMode } from './workflow';
+import { handleGetInstallation, handleExchangeToken, handleExchangeTokenWithPAT } from './oidc';
 
 export { Sandbox } from '@cloudflare/sandbox';
 export { RepoActor } from './actors';
@@ -33,6 +35,49 @@ app.get('/', (c) => c.redirect(GITHUB_REPO_URL, 302));
 app.get('/health', (c) => c.text('OK'));
 app.post('/webhooks', async (c) => {
 	return handleWebhook(c.req.raw, c.env);
+});
+
+// OIDC endpoints for OpenCode GitHub Action token exchange
+app.get('/get_github_app_installation', async (c) => {
+	const owner = c.req.query('owner');
+	const repo = c.req.query('repo');
+
+	if (!owner || !repo) {
+		return c.json({ error: 'Missing owner or repo parameter' }, 400);
+	}
+
+	const result = await handleGetInstallation(c.env, owner, repo);
+	if ('error' in result) {
+		return c.json(result, 400);
+	}
+	return c.json(result);
+});
+
+app.post('/exchange_github_app_token', async (c) => {
+	const authHeader = c.req.header('Authorization') ?? null;
+	const result = await handleExchangeToken(c.env, authHeader);
+
+	if ('error' in result) {
+		return c.json(result, 401);
+	}
+	return c.json(result);
+});
+
+app.post('/exchange_github_app_token_with_pat', async (c) => {
+	const authHeader = c.req.header('Authorization');
+	let body: { owner?: string; repo?: string } = {};
+
+	try {
+		body = await c.req.json();
+	} catch {
+		return c.json({ error: 'Invalid JSON body' }, 400);
+	}
+
+	const result = await handleExchangeTokenWithPAT(c.env, authHeader ?? null, body);
+	if ('error' in result) {
+		return c.json(result, 401);
+	}
+	return c.json(result);
 });
 
 export default app;
@@ -201,9 +246,11 @@ async function processRequest({
 		return;
 	}
 
-	// React to the triggering comment with eyes emoji to acknowledge the request
-	await createReaction(octokit, context.owner, context.repo, triggerCommentId, 'eyes');
-	console.info(`${logPrefix} Added eyes reaction to comment: ${triggerCommentId}, mode: ${mode}`);
+	// Add thumbs up reaction to acknowledge the request
+	await createReaction(octokit, context.owner, context.repo, triggerCommentId, '+1');
+
+	const responseCommentId = await createComment(octokit, context.owner, context.repo, context.issueNumber, 'Bonk is working on it...');
+	console.info(`${logPrefix} Created working comment: ${responseCommentId}, mode: ${mode}`);
 
 	if (mode === 'github_workflow') {
 		await runWorkflowMode(env, installationId, {
@@ -211,7 +258,7 @@ async function processRequest({
 			repo: context.repo,
 			issueNumber: context.issueNumber,
 			defaultBranch: context.defaultBranch,
-			triggerCommentId,
+			responseCommentId,
 			triggeringActor: context.actor,
 			eventType,
 			commentTimestamp,
@@ -225,9 +272,14 @@ async function processRequest({
 		context,
 		prompt,
 		triggerCommentId,
+		responseCommentId,
 		eventType,
 		commentTimestamp,
 	});
+}
+
+interface ProcessSandboxParams extends ProcessRequestParams {
+	responseCommentId: number;
 }
 
 async function processSandboxRequest({
@@ -236,7 +288,8 @@ async function processSandboxRequest({
 	context,
 	prompt,
 	triggerCommentId,
-}: ProcessRequestParams): Promise<void> {
+	responseCommentId,
+}: ProcessSandboxParams): Promise<void> {
 	const logPrefix = `[${context.owner}/${context.repo}#${context.issueNumber}]`;
 	const octokit = await createOctokit(env, installationId);
 	const gql = await createGraphQL(env, installationId);
@@ -252,16 +305,16 @@ async function processSandboxRequest({
 		if (context.isPullRequest) {
 			const prData = await fetchPullRequest(gql, context.owner, context.repo, context.issueNumber);
 			if (prData.headRepository.nameWithOwner !== prData.baseRepository.nameWithOwner) {
-				await createComment(octokit, context.owner, context.repo, context.issueNumber, 'Fork PRs are not supported.');
+				await updateComment(octokit, context.owner, context.repo, responseCommentId, 'Fork PRs are not supported.');
 				return;
 			}
 
 			context.headBranch = prData.headRefName;
 			context.headSha = prData.headRefOid;
-			dataContext = buildPRContext(prData, [triggerCommentId]);
+			dataContext = buildPRContext(prData, [triggerCommentId, responseCommentId]);
 		} else {
 			const issueData = await fetchIssue(gql, context.owner, context.repo, context.issueNumber);
-			dataContext = buildIssueContext(issueData, [triggerCommentId]);
+			dataContext = buildIssueContext(issueData, [triggerCommentId, responseCommentId]);
 		}
 
 		let result: SandboxResult;
@@ -298,13 +351,13 @@ async function processSandboxRequest({
 
 		if (lastError) {
 			console.error(`${logPrefix} Sandbox failed after all retries:`, lastError);
-			await createComment(octokit, context.owner, context.repo, context.issueNumber, `Bonk failed\n\n\`\`\`\n${lastError.message}\n\`\`\``);
+			await updateComment(octokit, context.owner, context.repo, responseCommentId, `Bonk failed\n\n\`\`\`\n${lastError.message}\n\`\`\``);
 			return;
 		}
 
 		const response = formatResponse(result!.response, result!.changedFiles, result!.sessionLink, modelString);
-		console.info(`${logPrefix} Creating comment with response`);
-		await createComment(octokit, context.owner, context.repo, context.issueNumber, response);
+		console.info(`${logPrefix} Updating comment with response`);
+		await updateComment(octokit, context.owner, context.repo, responseCommentId, response);
 
 		if (!context.isPullRequest && result!.changedFiles && result!.changedFiles.length > 0 && result!.newBranch) {
 			console.info(`${logPrefix} Creating PR from branch ${result!.newBranch}`);
@@ -319,11 +372,12 @@ async function processSandboxRequest({
 			);
 
 			const prLink = `https://github.com/${context.owner}/${context.repo}/pull/${prNumber}`;
-			console.info(`${logPrefix} Created PR #${prNumber}`);
+			console.info(`${logPrefix} Created PR #${prNumber}, updating comment`);
+			await updateComment(octokit, context.owner, context.repo, responseCommentId, `Bonk created PR: ${prLink}`);
 		}
 	} catch (error) {
 		console.error(`${logPrefix} Error processing request:`, error);
 		const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-		await createComment(octokit, context.owner, context.repo, context.issueNumber, `Bonk failed\n\n\`\`\`\n${errorMessage}\n\`\`\``);
+		await updateComment(octokit, context.owner, context.repo, responseCommentId, `Bonk failed\n\n\`\`\`\n${errorMessage}\n\`\`\``);
 	}
 }
