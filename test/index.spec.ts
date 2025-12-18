@@ -8,6 +8,7 @@ import {
 	formatResponse,
 	generateBranchName,
 } from "../src/events";
+import { extractRepoFromClaims } from "../src/oidc";
 import type { Env } from "../src/types";
 import type {
 	IssueCommentEvent,
@@ -212,5 +213,36 @@ describe("Branch Name Generation", () => {
 	it("generates PR branch name", () => {
 		const branch = generateBranchName("pr", 99);
 		expect(branch).toMatch(/^bonk\/pr99-\d{14}$/);
+	});
+});
+
+describe("OIDC Claim Parsing", () => {
+	it("extracts owner and repo from claims", () => {
+		const claims = {
+			iss: "https://token.actions.githubusercontent.com",
+			sub: "repo:octocat/hello-world:ref:refs/heads/main",
+			aud: "opencode-github-action",
+			exp: Math.floor(Date.now() / 1000) + 3600,
+			iat: Math.floor(Date.now() / 1000),
+			repository: "octocat/hello-world",
+			repository_owner: "octocat",
+			repository_id: "123456",
+			repository_owner_id: "789",
+			run_id: "1234567890",
+			run_number: "42",
+			run_attempt: "1",
+			actor: "octocat",
+			actor_id: "789",
+			workflow: "CI",
+			event_name: "push",
+			ref: "refs/heads/main",
+			ref_type: "branch",
+			job_workflow_ref: "octocat/hello-world/.github/workflows/ci.yml@refs/heads/main",
+			runner_environment: "github-hosted",
+		};
+
+		const { owner, repo } = extractRepoFromClaims(claims);
+		expect(owner).toBe("octocat");
+		expect(repo).toBe("hello-world");
 	});
 });
