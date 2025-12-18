@@ -38,7 +38,9 @@ app.post('/webhooks', async (c) => {
 });
 
 // OIDC endpoints for OpenCode GitHub Action token exchange
-app.get('/get_github_app_installation', async (c) => {
+const auth = new Hono<{ Bindings: Env }>();
+
+auth.get('/get_github_app_installation', async (c) => {
 	const owner = c.req.query('owner');
 	const repo = c.req.query('repo');
 
@@ -53,7 +55,7 @@ app.get('/get_github_app_installation', async (c) => {
 	return c.json(result);
 });
 
-app.post('/exchange_github_app_token', async (c) => {
+auth.post('/exchange_github_app_token', async (c) => {
 	const authHeader = c.req.header('Authorization') ?? null;
 	const result = await handleExchangeToken(c.env, authHeader);
 
@@ -63,7 +65,7 @@ app.post('/exchange_github_app_token', async (c) => {
 	return c.json(result);
 });
 
-app.post('/exchange_github_app_token_with_pat', async (c) => {
+auth.post('/exchange_github_app_token_with_pat', async (c) => {
 	const authHeader = c.req.header('Authorization');
 	let body: { owner?: string; repo?: string } = {};
 
@@ -79,6 +81,8 @@ app.post('/exchange_github_app_token_with_pat', async (c) => {
 	}
 	return c.json(result);
 });
+
+app.route('/auth', auth);
 
 export default app;
 
