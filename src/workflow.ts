@@ -31,10 +31,13 @@ export interface WorkflowResult {
 	prUrl?: string;
 }
 
-// Must match events.ts
+// Shared workflow configuration - keep in sync with scripts/bonk.yml.hbs
 const BOT_MENTION = "@ask-bonk";
 const BOT_COMMAND = "/bonk";
+const DEFAULT_MODEL = "anthropic/claude-opus-4-5";
+const OIDC_BASE_URL = "https://ask-bonk.silverlock.workers.dev/auth";
 
+// Template mirrors scripts/bonk.yml.hbs - this is the OIDC-based workflow
 function generateWorkflowContent(): string {
 	return `name: Bonk
 
@@ -58,23 +61,28 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write
-      contents: write
-      issues: write
-      pull-requests: write
+      contents: read
+      issues: read
+      pull-requests: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
+      - name: Configure Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
       - name: Run Bonk
         uses: sst/opencode/github@latest
         env:
           ANTHROPIC_API_KEY: \${{ secrets.ANTHROPIC_API_KEY }}
-          GITHUB_TOKEN: \${{ github.token }}
         with:
-          model: anthropic/claude-sonnet-4-20250514
-          use_github_token: true
+          model: ${DEFAULT_MODEL}
+          oidc_base_url: ${OIDC_BASE_URL}
+          mentions: "${BOT_COMMAND},${BOT_MENTION}"
 `;
 }
 
