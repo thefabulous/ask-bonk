@@ -38,8 +38,7 @@ jobs:
         uses: sst/opencode/github@latest
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GITHUB_TOKEN: ${{ github.token }}
         with:
           model: {{MODEL}}
-          use_github_token: true
+          oidc_base_url: https://ask-bonk.silverlock.workers.dev/auth
           mentions: "{{BOT_COMMAND}},{{BOT_MENTION}}"
