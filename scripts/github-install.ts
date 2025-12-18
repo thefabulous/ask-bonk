@@ -2,11 +2,12 @@
 /**
  * GitHub Install Script for Bonk
  *
- * Sets up Bonk workflow mode in a target repository:
- * 1. Detects git origin to suggest target repo
- * 2. Prompts for ANTHROPIC_API_KEY
- * 3. Sets secret via gh CLI (if available)
- * 4. Creates PR with workflow file
+ * Sets up Bonk in a target repository:
+ * 1. Installs the ask-bonk GitHub App
+ * 2. Detects git origin to suggest target repo
+ * 3. Prompts for ANTHROPIC_API_KEY
+ * 4. Sets secret via gh CLI (if available)
+ * 5. Creates PR with workflow file
  */
 
 import { execSync, spawnSync } from 'child_process';
@@ -18,6 +19,8 @@ const WORKFLOW_FILE_PATH = '.github/workflows/bonk.yml';
 const OPENCODE_CONFIG_PATH = '.opencode/opencode.jsonc';
 const WORKFLOW_BRANCH = 'bonk/add-workflow-file';
 const DEPLOY_BUTTON_URL = 'https://deploy.workers.cloudflare.com/?url=https://github.com/elithrar/ask-bonk';
+const GITHUB_APP_URL = 'https://github.com/apps/ask-bonk';
+const OIDC_BASE_URL = 'https://ask-bonk.silverlock.workers.dev/auth';
 
 const DEFAULT_MODEL = 'anthropic/claude-opus-4-5';
 const BOT_MENTION = '@ask-bonk';
@@ -346,9 +349,33 @@ function openUrl(url: string): boolean {
 	}
 }
 
+// Check if the GitHub App is installed for a repo
+async function checkAppInstallation(repo: string): Promise<boolean> {
+	try {
+		const [owner, repoName] = repo.split('/');
+		const response = await fetch(`${OIDC_BASE_URL}/get_github_app_installation?owner=${owner}&repo=${repoName}`);
+		if (!response.ok) return false;
+		const data = (await response.json()) as { installation: { id: number } | null };
+		return data.installation !== null;
+	} catch {
+		return false;
+	}
+}
+
+// Wait for app installation with polling (every 10s for up to 2 mins)
+async function waitForAppInstallation(repo: string, maxRetries = 12): Promise<boolean> {
+	for (let i = 0; i < maxRetries; i++) {
+		if (await checkAppInstallation(repo)) {
+			return true;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 10000));
+	}
+	return false;
+}
+
 async function main() {
 	log(`\n${colors.bold}${colors.cyan}Bonk GitHub Install${colors.reset}`);
-	log(`${colors.dim}Set up Bonk workflow mode in your repository${colors.reset}\n`);
+	log(`${colors.dim}Set up Bonk in your repository${colors.reset}\n`);
 
 	// Check for gh CLI
 	const hasGh = commandExists('gh');
@@ -395,6 +422,30 @@ async function main() {
 	} catch {
 		logError(`Cannot access repository ${targetRepo}. Check it exists and you have access.`);
 		process.exit(1);
+	}
+
+	// Check and install GitHub App
+	logStep('GitHub App Installation');
+	const isAppInstalled = await checkAppInstallation(targetRepo);
+
+	if (isAppInstalled) {
+		logSuccess('ask-bonk GitHub App is already installed');
+	} else {
+		log('The ask-bonk GitHub App needs to be installed for this repository.');
+		log(`\nInstall the app: ${colors.cyan}${GITHUB_APP_URL}${colors.reset}\n`);
+
+		openUrl(GITHUB_APP_URL);
+
+		logInfo('Waiting for app installation (checking every 10s for up to 2 mins)...');
+		const installed = await waitForAppInstallation(targetRepo);
+
+		if (!installed) {
+			logError(`App installation not detected for ${targetRepo}`);
+			log(`\nInstall the app manually: ${GITHUB_APP_URL}`);
+			process.exit(1);
+		}
+
+		logSuccess('GitHub App installed successfully');
 	}
 
 	// Check if workflow already exists
@@ -476,7 +527,8 @@ This PR adds the Bonk GitHub Action workflow to enable \`@ask-bonk\` / \`/bonk\`
 
 ## Setup
 
-${apiKey ? 'The `ANTHROPIC_API_KEY` secret has been configured.' : '**Action Required**: Set the `ANTHROPIC_API_KEY` secret in repository settings.'}
+- The ask-bonk GitHub App has been installed
+${apiKey ? '- The `ANTHROPIC_API_KEY` secret has been configured' : '- **Action Required**: Set the `ANTHROPIC_API_KEY` secret in repository settings'}
 
 ## Usage
 

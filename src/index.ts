@@ -253,22 +253,23 @@ async function processRequest({
 	// Add thumbs up reaction to acknowledge the request
 	await createReaction(octokit, context.owner, context.repo, triggerCommentId, '+1');
 
-	const responseCommentId = await createComment(octokit, context.owner, context.repo, context.issueNumber, 'Bonk is working on it...');
-	console.info(`${logPrefix} Created working comment: ${responseCommentId}, mode: ${mode}`);
-
 	if (mode === 'github_workflow') {
+		// Workflow mode: only react, don't comment unless there's a failure
+		console.info(`${logPrefix} Running in workflow mode`);
 		await runWorkflowMode(env, installationId, {
 			owner: context.owner,
 			repo: context.repo,
 			issueNumber: context.issueNumber,
 			defaultBranch: context.defaultBranch,
-			responseCommentId,
 			triggeringActor: context.actor,
 			eventType,
 			commentTimestamp,
 		});
 		return;
 	}
+
+	const responseCommentId = await createComment(octokit, context.owner, context.repo, context.issueNumber, 'Bonk is working on it...');
+	console.info(`${logPrefix} Created working comment: ${responseCommentId}, mode: ${mode}`);
 
 	await processSandboxRequest({
 		env,
