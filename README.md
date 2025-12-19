@@ -14,54 +14,36 @@ It's a code (and docs!) review agent that responds to mentions in issues and PRs
 
 ## Quick Start
 
-The fastest way to get started:
-
 1. Install the [ask-bonk GitHub App](https://github.com/apps/ask-bonk) on your repository
-2. Add `OPENCODE_API_KEY` to your repository secrets
+2. Add `OPENCODE_API_KEY` to your repository secrets (**Settings** > **Secrets and variables** > **Actions**) - [get one here](https://opencode.ai/api-keys)
 3. Mention `@ask-bonk` or `/bonk` in any issue or PR
 
-That's it! On first mention, Bonk will create a PR to add the workflow file to your repo.
+On first mention, Bonk will create a PR to add the workflow file to your repo.
+
+### Using Other Providers
+
+[Any OpenCode provider](https://opencode.ai/docs/providers/) is supported. Update your `bonk.yml` workflow file to specify a different model and pass the appropriate API key:
+
+```yaml
+      - name: Run Bonk
+        uses: sst/opencode/github@dev
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        with:
+          model: anthropic/claude-opus-4-5
+```
 
 ## Setup
 
-### GitHub App
+### Self-Hosting
 
-**Managed (recommended)**: Install the [ask-bonk GitHub App](https://github.com/apps/ask-bonk) on your repositories. The app handles webhook delivery and workflow tracking.
-
-**Self-hosted**: Deploy your own instance and [create a GitHub App](https://docs.github.com/en/apps/creating-github-apps) with the following permissions:
+To run your own instance, [create a GitHub App](https://docs.github.com/en/apps/creating-github-apps) with the following permissions:
 - Issues: Read & Write
 - Pull requests: Read & Write
 - Contents: Read & Write
 - Metadata: Read
 
 Subscribe to: Issue comments, Pull request review comments, Pull request reviews.
-
-### Workflow File
-
-Bonk runs via GitHub Actions using the [`sst/opencode/github`](https://github.com/sst/opencode) action. When you first mention Bonk, it will automatically create a PR to add the workflow file (`.github/workflows/bonk.yml`) to your repository.
-
-### Required Secrets
-
-Add the following secret to your repository (**Settings** > **Secrets and variables** > **Actions**):
-
-| Secret | Description |
-|--------|-------------|
-| `OPENCODE_API_KEY` | Your OpenCode API key ([get one here](https://opencode.ai/api-keys)) |
-
-The `GITHUB_TOKEN` is automatically provided by GitHub Actions.
-
-### Install Script
-
-Alternatively, use the install script to set up Bonk in a repository:
-
-```bash
-npx tsx scripts/github-install.ts
-```
-
-This will:
-1. Detect the target repository from your git origin
-2. Prompt for your `OPENCODE_API_KEY` and set it as a repository secret
-3. Create a PR with the workflow file
 
 ## Usage
 
