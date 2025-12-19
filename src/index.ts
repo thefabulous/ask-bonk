@@ -17,6 +17,7 @@ import {
 	buildPRContext,
 	getInstallationToken,
 	createReaction,
+	type CommentType,
 } from './github';
 import { parseIssueCommentEvent, parsePRReviewCommentEvent, parsePRReviewEvent, getModel, formatResponse } from './events';
 import { extractImages } from './images';
@@ -158,6 +159,7 @@ async function handleIssueComment(payload: IssueCommentEvent, env: Env): Promise
 		context: parsed.context,
 		prompt: parsed.prompt,
 		triggerCommentId: parsed.triggerCommentId,
+		commentType: 'issue_comment',
 		eventType: 'issue_comment',
 		commentTimestamp: payload.comment.created_at,
 	});
@@ -179,6 +181,7 @@ async function handlePRReviewComment(payload: PullRequestReviewCommentEvent, env
 		context: parsed.context,
 		prompt: parsed.prompt,
 		triggerCommentId: parsed.triggerCommentId,
+		commentType: 'pull_request_review_comment',
 		eventType: 'pull_request_review_comment',
 		commentTimestamp: payload.comment.created_at,
 	});
@@ -200,10 +203,13 @@ async function handlePRReview(payload: PullRequestReviewEvent, env: Env): Promis
 		context: parsed.context,
 		prompt: parsed.prompt,
 		triggerCommentId: parsed.triggerCommentId,
+		commentType: 'pull_request_review',
 		eventType: 'pull_request_review',
 		commentTimestamp: payload.review.submitted_at ?? new Date().toISOString(),
 	});
 }
+
+
 
 interface ProcessRequestParams {
 	env: Env;
@@ -223,6 +229,7 @@ interface ProcessRequestParams {
 	};
 	prompt: string;
 	triggerCommentId: number;
+	commentType: CommentType;
 	eventType: string;
 	commentTimestamp: string;
 }
@@ -237,6 +244,7 @@ async function processRequest({
 	context,
 	prompt,
 	triggerCommentId,
+	commentType,
 	eventType,
 	commentTimestamp,
 }: ProcessRequestParams): Promise<void> {
@@ -251,7 +259,7 @@ async function processRequest({
 	}
 
 	// Add thumbs up reaction to acknowledge the request
-	await createReaction(octokit, context.owner, context.repo, triggerCommentId, '+1');
+	await createReaction(octokit, context.owner, context.repo, triggerCommentId, '+1', commentType);
 
 	if (mode === 'github_workflow') {
 		// Workflow mode: only react, don't comment unless there's a failure
@@ -277,6 +285,7 @@ async function processRequest({
 		context,
 		prompt,
 		triggerCommentId,
+		commentType,
 		responseCommentId,
 		eventType,
 		commentTimestamp,

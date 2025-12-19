@@ -11,6 +11,7 @@ import {
 	findOpenPR,
 	findWorkflowRun,
 } from "./github";
+import workflowTemplate from "../scripts/bonk.yml.hbs";
 
 const WORKFLOW_FILE_PATH = ".github/workflows/bonk.yml";
 const WORKFLOW_BRANCH = "bonk/add-workflow-file";
@@ -31,51 +32,15 @@ export interface WorkflowResult {
 	prUrl?: string;
 }
 
-// Must match events.ts
 const BOT_MENTION = "@ask-bonk";
 const BOT_COMMAND = "/bonk";
+const DEFAULT_MODEL = "opencode/claude-opus-4-5";
 
 function generateWorkflowContent(): string {
-	return `name: Bonk
-
-on:
-  issue_comment:
-    types: [created]
-  pull_request_review_comment:
-    types: [created]
-  pull_request_review:
-    types: [submitted]
-
-jobs:
-  bonk:
-    if: |
-      github.event.sender.type != 'Bot' &&
-      (
-        (github.event_name == 'issue_comment' && (contains(github.event.comment.body, '${BOT_MENTION}') || contains(github.event.comment.body, '${BOT_COMMAND}'))) ||
-        (github.event_name == 'pull_request_review_comment' && (contains(github.event.comment.body, '${BOT_MENTION}') || contains(github.event.comment.body, '${BOT_COMMAND}'))) ||
-        (github.event_name == 'pull_request_review' && (contains(github.event.review.body, '${BOT_MENTION}') || contains(github.event.review.body, '${BOT_COMMAND}')))
-      )
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: write
-      issues: write
-      pull-requests: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Run Bonk
-        uses: sst/opencode/github@latest
-        env:
-          ANTHROPIC_API_KEY: \${{ secrets.ANTHROPIC_API_KEY }}
-          GITHUB_TOKEN: \${{ github.token }}
-        with:
-          model: anthropic/claude-sonnet-4-20250514
-          use_github_token: true
-`;
+	return workflowTemplate
+		.replace(/\{\{BOT_MENTION\}\}/g, BOT_MENTION)
+		.replace(/\{\{BOT_COMMAND\}\}/g, BOT_COMMAND)
+		.replace(/\{\{MODEL\}\}/g, DEFAULT_MODEL);
 }
 
 
@@ -205,7 +170,7 @@ After merging, ensure the following secret is set in your repository:
 
 1. Go to **Settings** > **Secrets and variables** > **Actions**
 2. Add a new repository secret:
-   - **Name**: \`ANTHROPIC_API_KEY\`
+   - **Name**: \`OPENCODE_API_KEY\`
    - **Value**: Your Anthropic API key (get one at https://console.anthropic.com/)
 
 ## Usage
@@ -240,7 +205,7 @@ Or use the slash command:
 		owner,
 		repo,
 		issueNumber,
-		`I noticed the workflow file is missing. I've created a PR to add it: #${prNumber}\n\nOnce merged and configured with your \`ANTHROPIC_API_KEY\` secret, mention me again!\n\n${prUrl}`
+		`I noticed the workflow file is missing. I've created a PR to add it: #${prNumber}\n\nOnce merged and configured with your \`OPENCODE_API_KEY\` secret, mention me again!\n\n${prUrl}`
 	);
 
 	return {
