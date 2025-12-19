@@ -20,6 +20,19 @@ It's a code (and docs!) review agent that responds to mentions in issues and PRs
 
 On first mention, Bonk will create a PR to add the workflow file to your repo.
 
+### Using Other Providers
+
+[Any OpenCode provider](https://opencode.ai/docs/providers/) is supported. Update your `bonk.yml` workflow file to specify a different model and pass the appropriate API key:
+
+```yaml
+      - name: Run Bonk
+        uses: sst/opencode/github@dev
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        with:
+          model: anthropic/claude-opus-4-5
+```
+
 ## Setup
 
 ### Self-Hosting
