@@ -19,7 +19,7 @@ import {
 	createReaction,
 	type CommentType,
 } from './github';
-import { parseIssueCommentEvent, parsePRReviewCommentEvent, getModel, formatResponse } from './events';
+import { parseIssueCommentEvent, parsePRReviewCommentEvent, getModel, formatResponse, hasMention } from './events';
 import { extractImages } from './images';
 import { runOpencodeSandbox, type SandboxResult } from './sandbox';
 import { runWorkflowMode } from './workflow';
@@ -187,13 +187,21 @@ async function handlePRReviewComment(payload: PullRequestReviewCommentEvent, env
 	});
 }
 
+// Reply with helpful message when someone mentions Bonk in an unsupported event type
 async function replyUnsupportedEvent(eventName: string, payload: unknown, env: Env): Promise<void> {
 	const p = payload as {
 		installation?: { id?: number };
 		repository?: { owner?: { login?: string }; name?: string };
 		issue?: { number?: number };
 		pull_request?: { number?: number };
+		comment?: { body?: string };
+		review?: { body?: string };
 	};
+
+	// Only post if the event actually mentions Bonk
+	const body = p.comment?.body ?? p.review?.body ?? '';
+	if (!hasMention(body)) return;
+
 	const installationId = p.installation?.id;
 	if (!installationId) return;
 
