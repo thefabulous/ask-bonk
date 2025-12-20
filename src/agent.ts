@@ -1,5 +1,4 @@
-import { Actor, Persist } from '@cloudflare/actors';
-import type { Schedule } from '@cloudflare/actors/alarms';
+import { Agent } from 'agents';
 import type { Env } from './types';
 import { createOctokit, createComment, getWorkflowRunStatus } from './github';
 
@@ -10,25 +9,27 @@ export interface CheckStatusPayload {
 	createdAt: number;
 }
 
+interface RepoAgentState {
+	installationId: number;
+}
+
 const POLL_INTERVAL_SECONDS = 30;
 const MAX_TRACKING_TIME_MS = 30 * 60 * 1000;
 
 // Tracks workflow runs per repo. ID format: "{owner}/{repo}"
-export class RepoActor extends Actor<Env> {
-	private owner: string;
-	private repo: string;
+export class RepoAgent extends Agent<Env, RepoAgentState> {
+	initialState: RepoAgentState = { installationId: 0 };
 
-	@Persist installationId: number = 0;
+	private get owner(): string {
+		return this.name.split('/')[0] ?? '';
+	}
 
-	constructor(ctx: DurableObjectState, env: Env) {
-		super(ctx, env);
-		const [owner, repo] = ctx.id.name?.split('/') ?? ['', ''];
-		this.owner = owner;
-		this.repo = repo;
+	private get repo(): string {
+		return this.name.split('/')[1] ?? '';
 	}
 
 	async setInstallationId(id: number): Promise<void> {
-		this.installationId = id;
+		this.setState({ ...this.state, installationId: id });
 	}
 
 	async trackRun(runId: number, runUrl: string, issueNumber: number): Promise<void> {
@@ -42,12 +43,12 @@ export class RepoActor extends Actor<Env> {
 			createdAt: Date.now(),
 		};
 
-		await this.alarms.schedule<CheckStatusPayload>(POLL_INTERVAL_SECONDS, 'checkWorkflowStatus', payload);
+		await this.schedule<CheckStatusPayload>(POLL_INTERVAL_SECONDS, 'checkWorkflowStatus', payload);
 		console.info(`${logPrefix} Scheduled status check in ${POLL_INTERVAL_SECONDS}s`);
 	}
 
-	// Called by alarms system
-	async checkWorkflowStatus(payload: CheckStatusPayload, _schedule: Schedule<CheckStatusPayload>): Promise<void> {
+	// Called by scheduling system
+	async checkWorkflowStatus(payload: CheckStatusPayload): Promise<void> {
 		const logPrefix = `[${this.owner}/${this.repo}]`;
 		const { runId, runUrl, issueNumber, createdAt } = payload;
 
@@ -62,10 +63,10 @@ export class RepoActor extends Actor<Env> {
 
 		let octokit;
 		try {
-			octokit = await createOctokit(this.env, this.installationId);
+			octokit = await createOctokit(this.env, this.state.installationId);
 		} catch (error) {
 			console.error(`${logPrefix} Failed to create Octokit:`, error);
-			await this.alarms.schedule<CheckStatusPayload>(POLL_INTERVAL_SECONDS, 'checkWorkflowStatus', payload);
+			await this.schedule<CheckStatusPayload>(POLL_INTERVAL_SECONDS, 'checkWorkflowStatus', payload);
 			return;
 		}
 
@@ -82,11 +83,11 @@ export class RepoActor extends Actor<Env> {
 					console.info(`${logPrefix} Run ${runId} succeeded - OpenCode will post response`);
 				}
 			} else {
-				await this.alarms.schedule<CheckStatusPayload>(POLL_INTERVAL_SECONDS, 'checkWorkflowStatus', payload);
+				await this.schedule<CheckStatusPayload>(POLL_INTERVAL_SECONDS, 'checkWorkflowStatus', payload);
 			}
 		} catch (error) {
 			console.error(`${logPrefix} Failed to check run ${runId}:`, error);
-			await this.alarms.schedule<CheckStatusPayload>(POLL_INTERVAL_SECONDS, 'checkWorkflowStatus', payload);
+			await this.schedule<CheckStatusPayload>(POLL_INTERVAL_SECONDS, 'checkWorkflowStatus', payload);
 		}
 	}
 
@@ -105,7 +106,7 @@ export class RepoActor extends Actor<Env> {
 		const body = `${statusMessage}\n\n[View workflow run](${runUrl})`;
 
 		try {
-			const octokit = await createOctokit(this.env, this.installationId);
+			const octokit = await createOctokit(this.env, this.state.installationId);
 			await createComment(octokit, this.owner, this.repo, issueNumber, body);
 			console.info(`${logPrefix} Posted failure comment for issue #${issueNumber}: ${conclusion}`);
 		} catch (error) {

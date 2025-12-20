@@ -11,7 +11,7 @@
 		"github:install": "bun scripts/github-install.ts"
 	},
 	"dependencies": {
-		"@cloudflare/actors": "^0.0.1-beta.6",
+		"agents": "^0.0.83",
 		"@cloudflare/sandbox": "^0.6.7",
 		"@octokit/auth-app": "^8.1.2",
 		"@octokit/plugin-retry": "^8.0.3",

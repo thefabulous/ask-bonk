@@ -1,5 +1,7 @@
 import type { Octokit } from "@octokit/rest";
+import { getAgentByName } from "agents";
 import type { Env } from "./types";
+import type { RepoAgent } from "./agent";
 import {
 	createOctokit,
 	createComment,
@@ -83,13 +85,12 @@ export async function runWorkflowMode(
 	if (run) {
 		console.info(`${logPrefix} Found workflow run ${run.id}`);
 
-		// RepoActor handles failure/timeout - OpenCode posts success responses
+		// RepoAgent handles failure/timeout - OpenCode posts success responses
 		// Only creates a comment if the workflow fails
-		const actorId = env.REPO_ACTOR.idFromName(`${owner}/${repo}`);
-		const actor = env.REPO_ACTOR.get(actorId);
+		const agent = await getAgentByName<Env, RepoAgent>(env.REPO_AGENT, `${owner}/${repo}`);
 
-		await actor.setInstallationId(installationId);
-		await actor.trackRun(run.id, run.url, issueNumber);
+		await agent.setInstallationId(installationId);
+		await agent.trackRun(run.id, run.url, issueNumber);
 
 		return {
 			success: true,

@@ -26,7 +26,7 @@ import { runWorkflowMode } from './workflow';
 import { handleGetInstallation, handleExchangeToken, handleExchangeTokenWithPAT } from './oidc';
 
 export { Sandbox } from '@cloudflare/sandbox';
-export { RepoActor } from './actors';
+export { RepoAgent } from './agent';
 
 const GITHUB_REPO_URL = 'https://github.com/elithrar/ask-bonk';
 

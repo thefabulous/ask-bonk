@@ -1,5 +1,6 @@
 import type { Sandbox } from "@cloudflare/sandbox";
-import type { RepoActor } from "./actors";
+import type { AgentNamespace } from "agents";
+import type { RepoAgent } from "./agent";
 
 // Bonk operational mode
 export type BonkMode = "sandbox_sdk" | "github_workflow";
@@ -7,7 +8,7 @@ export type BonkMode = "sandbox_sdk" | "github_workflow";
 // Environment bindings
 export interface Env {
 	Sandbox: DurableObjectNamespace<Sandbox>;
-	REPO_ACTOR: DurableObjectNamespace<RepoActor>;
+	REPO_AGENT: AgentNamespace<RepoAgent>;
 	APP_INSTALLATIONS: KVNamespace;
 	GITHUB_APP_ID: string;
 	GITHUB_APP_PRIVATE_KEY: string;
