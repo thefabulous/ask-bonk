@@ -34,9 +34,9 @@ src/
   github.ts     # GitHub API interactions (Octokit, GraphQL queries)
   sandbox.ts    # Cloudflare Sandbox + OpenCode SDK integration
   events.ts     # Webhook event parsing and response formatting
-  workflow.ts   # GitHub Actions workflow mode
+  workflow.ts   # GitHub Actions workflow mode (creates workflow PRs, tracks runs)
   oidc.ts       # OIDC token exchange for GitHub Actions
-  actors.ts     # Durable Object actors
+  agent.ts      # RepoAgent Durable Object for tracking workflow runs
   images.ts     # Image extraction from comments
   types.ts      # TypeScript type definitions
 test/
@@ -44,6 +44,8 @@ test/
   fixtures/     # JSON fixtures for webhook payloads
 scripts/
   github-install.ts  # GitHub App installation script
+  bonk.yml.hbs       # Handlebars template for workflow file generation
+  INSTRUCTIONS.md    # Instructions for GitHub Actions workflow mode
 ```
 
 ## Code Conventions
@@ -67,3 +69,11 @@ Run tests with `bun run test`. Tests focus on:
 - GraphQL is used for fetching issue/PR context with comments
 - Webhook signature verification via `@octokit/webhooks`
 - Sandbox executes OpenCode in isolated environment with git access
+
+## Operation Modes
+
+The bot supports two modes controlled by `BONK_MODE` environment variable:
+
+1. **sandbox_sdk** (default): Runs OpenCode directly in Cloudflare Sandbox. Immediate response posted as a comment.
+
+2. **github_workflow**: Triggers a GitHub Actions workflow to run OpenCode. The RepoAgent Durable Object (using `agents` framework) tracks workflow run status and posts failure comments if needed. On success, OpenCode posts its own response.
