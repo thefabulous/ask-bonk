@@ -1,4 +1,4 @@
-name: Weekly Dependency Update
+name: weekly deps update
 
 on:
   schedule:
