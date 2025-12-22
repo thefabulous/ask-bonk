@@ -1,9 +1,10 @@
 import type {
 	IssueCommentEvent,
+	IssuesEvent,
 	PullRequestReviewCommentEvent,
 	PullRequestReviewEvent,
 } from "@octokit/webhooks-types";
-import type { Env, EventContext, ReviewCommentContext, ScheduledEventContext } from "./types";
+import { DEFAULT_MODEL, type Env, type EventContext, type ReviewCommentContext, type ScheduledEventContext, type WorkflowDispatchContext, type ScheduleEventPayload, type WorkflowDispatchPayload } from "./types";
 
 const BOT_MENTION = "@ask-bonk";
 const BOT_COMMAND = "/bonk";
@@ -163,8 +164,74 @@ export function parsePRReviewEvent(payload: PullRequestReviewEvent): {
 	};
 }
 
+// Parse issues events - supports 'opened' and 'edited' actions.
+// - opened: Always processed
+// - edited: Only processed if the body changed significantly (threshold %+) OR contains a mention
+// Other actions (deleted, labeled, etc.) are explicitly rejected.
+export function parseIssuesEvent(
+	payload: IssuesEvent,
+	editedThresholdPc = 20
+): {
+	context: Omit<EventContext, "env">;
+	issueTitle: string;
+	issueBody: string;
+	issueAuthor: string;
+} | null {
+	if (payload.action === "opened") {
+		return {
+			context: {
+				owner: payload.repository.owner.login,
+				repo: payload.repository.name,
+				issueNumber: payload.issue.number,
+				commentId: 0,
+				actor: payload.issue.user.login,
+				isPullRequest: false,
+				isPrivate: payload.repository.private,
+				defaultBranch: payload.repository.default_branch,
+			},
+			issueTitle: payload.issue.title,
+			issueBody: payload.issue.body ?? "",
+			issueAuthor: payload.issue.user.login,
+		};
+	}
+
+	if (payload.action === "edited") {
+		const newBody = payload.issue.body ?? "";
+		
+		// Note: hasMention check removed - workflows already filter for /bonk mentions
+		// Check if body changed significantly (threshold %+)
+		// payload.changes.body.from contains the previous body
+		const changes = payload.changes as { body?: { from: string } } | undefined;
+		const oldBody = changes?.body?.from;
+		
+		if (!hasSignificantChange(oldBody, newBody, editedThresholdPc)) {
+			console.log(`issues:edited body change below ${editedThresholdPc}% threshold - ignoring`);
+			return null;
+		}
+
+		return {
+			context: {
+				owner: payload.repository.owner.login,
+				repo: payload.repository.name,
+				issueNumber: payload.issue.number,
+				commentId: 0,
+				actor: payload.sender.login,
+				isPullRequest: false,
+				isPrivate: payload.repository.private,
+				defaultBranch: payload.repository.default_branch,
+			},
+			issueTitle: payload.issue.title,
+			issueBody: newBody,
+			issueAuthor: payload.issue.user.login,
+		};
+	}
+
+	console.log(`Unsupported issues event action: ${payload.action}`);
+	return null;
+}
+
 export function getModel(env: Env): { providerID: string; modelID: string } {
-	const model = env.DEFAULT_MODEL ?? "anthropic/claude-sonnet-4-20250514";
+	const model = env.DEFAULT_MODEL ?? DEFAULT_MODEL;
 	const [providerID, ...rest] = model.split("/");
 	const modelID = rest.join("/");
 
@@ -221,17 +288,55 @@ export function generateBranchName(type: "issue" | "pr", issueNumber: number): s
 	return `bonk/${type}${issueNumber}-${timestamp}`;
 }
 
-// GitHub schedule event payload structure
-export interface ScheduleEventPayload {
-	schedule: string;
-	repository: {
-		owner: { login: string };
-		name: string;
-		private: boolean;
-		default_branch: string;
-	};
-	installation?: { id: number };
-	workflow?: string;
+/**
+ * Calculate word-based change percentage between two strings.
+ * Returns 0-100 representing how much the content changed.
+ */
+export function calculateChangePercent(oldText: string, newText: string): number {
+	const tokenize = (text: string): string[] =>
+		text.toLowerCase().split(/\s+/).filter(Boolean);
+
+	const oldWords = tokenize(oldText);
+	const newWords = tokenize(newText);
+
+	if (oldWords.length === 0 && newWords.length === 0) return 0;
+	if (oldWords.length === 0 || newWords.length === 0) return 100;
+
+	// Count word frequencies
+	const oldFreq = new Map<string, number>();
+	for (const word of oldWords) {
+		oldFreq.set(word, (oldFreq.get(word) ?? 0) + 1);
+	}
+
+	const newFreq = new Map<string, number>();
+	for (const word of newWords) {
+		newFreq.set(word, (newFreq.get(word) ?? 0) + 1);
+	}
+
+	// Calculate words in common (using minimum of frequencies)
+	let commonWords = 0;
+	for (const [word, count] of oldFreq) {
+		commonWords += Math.min(count, newFreq.get(word) ?? 0);
+	}
+
+	// Change percentage based on average of both texts
+	const avgLength = (oldWords.length + newWords.length) / 2;
+	const changePercent = ((avgLength - commonWords) / avgLength) * 100;
+
+	return Math.round(Math.min(100, Math.max(0, changePercent)));
+}
+
+/**
+ * Check if issue edit exceeds a word-change threshold.
+ * For issues:edited payloads, compares changes.body.from with issue.body.
+ */
+export function hasSignificantChange(
+	oldBody: string | undefined,
+	newBody: string | undefined,
+	thresholdPercent = 20
+): boolean {
+	if (!oldBody || !newBody) return true; // Treat missing as significant
+	return calculateChangePercent(oldBody, newBody) >= thresholdPercent;
 }
 
 export function parseScheduleEvent(payload: ScheduleEventPayload): ScheduledEventContext | null {
@@ -245,6 +350,23 @@ export function parseScheduleEvent(payload: ScheduleEventPayload): ScheduledEven
 		isPrivate: payload.repository.private,
 		defaultBranch: payload.repository.default_branch,
 		schedule: payload.schedule,
+		workflow: payload.workflow ?? null,
+	};
+}
+
+export function parseWorkflowDispatchEvent(payload: WorkflowDispatchPayload): WorkflowDispatchContext | null {
+	if (!payload.repository || !payload.ref) {
+		return null;
+	}
+
+	return {
+		owner: payload.repository.owner.login,
+		repo: payload.repository.name,
+		isPrivate: payload.repository.private,
+		defaultBranch: payload.repository.default_branch,
+		ref: payload.ref,
+		sender: payload.sender.login,
+		inputs: payload.inputs ?? {},
 		workflow: payload.workflow ?? null,
 	};
 }

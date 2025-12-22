@@ -72,8 +72,10 @@ Run tests with `bun run test`. Tests focus on:
 
 ## Operation Modes
 
-The bot supports two modes controlled by `BONK_MODE` environment variable:
+The bot has two endpoints with different execution models:
 
-1. **sandbox_sdk** (default): Runs OpenCode directly in Cloudflare Sandbox. Immediate response posted as a comment.
+### `/webhooks` - GitHub Actions Workflow Mode
+All webhook events (issue comments, PR review comments, issues, schedule, workflow_dispatch) trigger GitHub Actions workflows. OpenCode runs inside the workflow, not in Bonk's infrastructure. The RepoAgent Durable Object tracks workflow run status and posts failure comments if needed.
 
-2. **github_workflow**: Triggers a GitHub Actions workflow to run OpenCode. The RepoAgent Durable Object (using `agents` framework) tracks workflow run status and posts failure comments if needed. On success, OpenCode posts its own response.
+### `/ask` - Direct Sandbox Mode
+The `/ask` endpoint runs OpenCode directly in Cloudflare Sandbox for programmatic API access. Requires bearer auth (`ASK_SECRET`). Returns SSE stream with session events.

@@ -58,11 +58,18 @@ Or use the slash command:
 
 Bonk can respond to the following GitHub webhook events:
 
-| Event | Trigger | Description |
-|-------|---------|-------------|
-| `issue_comment` | `/bonk` or `@ask-bonk` in issue/PR comment | Responds to mentions in issue and PR comments |
-| `pull_request_review_comment` | `/bonk` or `@ask-bonk` in PR review comment | Responds to mentions in PR line comments |
-| `schedule` | Cron schedule in workflow | Runs automated tasks on a schedule (prompt via workflow file) |
+| Event | Action | Trigger | Description |
+|-------|--------|---------|-------------|
+| `issue_comment` | `created` | `/bonk` or `@ask-bonk` in comment body | Responds to mentions in issue and PR comments |
+| `pull_request_review_comment` | `created` | `/bonk` or `@ask-bonk` in comment body | Responds to mentions in PR line comments (with diff context) |
+| `issues` | `opened` | New issue created | Automatically responds to newly opened issues (workflow mode only) |
+| `issues` | `edited` | Issue body edited | Only triggers if body contains `/bonk`/`@ask-bonk` OR body changed 20%+ |
+| `schedule` | — | Cron expression in workflow | Runs automated tasks on a schedule (prompt via workflow file) |
+| `workflow_dispatch` | — | Manual workflow trigger | Runs tasks manually via Actions UI (prompt via workflow file) |
+
+**Event Categories:**
+- **User-driven events** (`issue_comment`, `pull_request_review_comment`, `issues`): Triggered by user actions. Require write access check. Add reactions to acknowledge.
+- **Repo-driven events** (`schedule`, `workflow_dispatch`): Triggered by repository automation. No actor to check permissions for. Prompt comes from workflow file.
 
 #### Scheduled Tasks
 

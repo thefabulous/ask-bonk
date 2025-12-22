@@ -22,7 +22,7 @@ const DEPLOY_BUTTON_URL = 'https://deploy.workers.cloudflare.com/?url=https://gi
 const GITHUB_APP_URL = 'https://github.com/apps/ask-bonk';
 const OIDC_BASE_URL = 'https://ask-bonk.silverlock.workers.dev/auth';
 
-const DEFAULT_MODEL = 'anthropic/claude-opus-4-5';
+const DEFAULT_MODEL = 'opencode/claude-opus-4-5';
 const BOT_MENTION = '@ask-bonk';
 const BOT_COMMAND = '/bonk';
 const DEFAULT_MENTIONS = `${BOT_COMMAND},${BOT_MENTION}`;

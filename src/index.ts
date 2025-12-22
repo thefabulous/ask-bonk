@@ -1,45 +1,104 @@
 import { Hono } from 'hono';
-import type { IssueCommentEvent, PullRequestReviewCommentEvent } from '@octokit/webhooks-types';
-import type { BonkMode, Env } from './types';
+import { bearerAuth } from 'hono/bearer-auth';
+import { ulid } from 'ulid';
+import type { IssueCommentEvent, IssuesEvent, PullRequestReviewCommentEvent, WorkflowDispatchEvent } from '@octokit/webhooks-types';
+import type { Env, AskRequest } from './types';
 import {
 	createOctokit,
-	createGraphQL,
 	createWebhooks,
 	verifyWebhook,
 	hasWriteAccess,
-	createComment,
-	updateComment,
-	createPullRequest,
-	getRepository,
-	fetchIssue,
-	fetchPullRequest,
-	buildIssueContext,
-	buildPRContext,
-	getInstallationToken,
 	createReaction,
-	type CommentType,
+	createComment,
+	type ReactionTarget,
 } from './github';
-import { parseIssueCommentEvent, parsePRReviewCommentEvent, parseScheduleEvent, getModel, formatResponse, hasMention, type ScheduleEventPayload } from './events';
-import { extractImages } from './images';
-import { runOpencodeSandbox, type SandboxResult } from './sandbox';
+import type { ScheduleEventPayload, WorkflowDispatchPayload } from './types';
+import { parseIssueCommentEvent, parseIssuesEvent, parsePRReviewCommentEvent, parseScheduleEvent, parseWorkflowDispatchEvent, hasMention } from './events';
 import { runWorkflowMode } from './workflow';
 import { handleGetInstallation, handleExchangeToken, handleExchangeTokenWithPAT } from './oidc';
 import { RepoAgent } from './agent';
+import { runAsk } from './sandbox';
 
 export { Sandbox } from '@cloudflare/sandbox';
 export { RepoAgent };
 
 const GITHUB_REPO_URL = 'https://github.com/elithrar/ask-bonk';
 
-const SUPPORTED_EVENTS = ['issue_comment', 'pull_request_review_comment', 'schedule'] as const;
+// User-driven events: triggered by user actions (comments, issue creation)
+// Repo-driven events: triggered by repository automation (schedule, workflow_dispatch)
+const USER_EVENTS = ['issue_comment', 'pull_request_review_comment', 'issues'] as const;
+const REPO_EVENTS = ['schedule', 'workflow_dispatch'] as const;
+const SUPPORTED_EVENTS = [...USER_EVENTS, ...REPO_EVENTS] as const;
 
 const app = new Hono<{ Bindings: Env }>();
 
 app.get('/', (c) => c.redirect(GITHUB_REPO_URL, 302));
 app.get('/health', (c) => c.text('OK'));
+
+// Webhooks endpoint - ALWAYS runs via GitHub Actions workflow mode
 app.post('/webhooks', async (c) => {
 	return handleWebhook(c.req.raw, c.env);
 });
+
+// /ask endpoint - runs OpenCode directly in the sandbox
+// Requires bearer auth with ASK_SECRET. Returns SSE stream.
+// In future, responses may be routed to other destinations (email, Discord, etc)
+const ask = new Hono<{ Bindings: Env }>();
+
+ask.use('*', async (c, next) => {
+	const secret = c.env.ASK_SECRET;
+	// Empty or missing secret means endpoint is disabled
+	if (!secret) {
+		return c.json({ error: 'Ask endpoint is disabled' }, 403);
+	}
+	const auth = bearerAuth({ token: secret });
+	return auth(c, next);
+});
+
+ask.post('/', async (c) => {
+	const askId = ulid();
+	let rawBody: Omit<AskRequest, 'id'>;
+	try {
+		rawBody = await c.req.json();
+	} catch {
+		return c.json({ error: 'Invalid JSON body' }, 400);
+	}
+
+	// Validate required fields
+	if (!rawBody.owner || !rawBody.repo || !rawBody.prompt) {
+		return c.json({ error: 'Missing required fields: owner, repo, prompt' }, 400);
+	}
+
+	// Build full request with ID
+	const body: AskRequest = { id: askId, ...rawBody };
+	const repoKey = `${body.owner}/${body.repo}`;
+	const logPrefix = `[${repoKey}][ask:${askId}]`;
+
+	// Look up installation ID for this repo
+	const installationIdStr = await c.env.APP_INSTALLATIONS.get(repoKey);
+	if (!installationIdStr) {
+		console.error(`${logPrefix} No GitHub App installation found`);
+		return c.json({ error: `No GitHub App installation found for ${repoKey}` }, 404);
+	}
+	const installationId = parseInt(installationIdStr, 10);
+
+	try {
+		const stream = await runAsk(c.env, installationId, body);
+		return new Response(stream, {
+			headers: {
+				'Content-Type': 'text/event-stream',
+				'Cache-Control': 'no-cache',
+				'Connection': 'keep-alive',
+			},
+		});
+	} catch (error) {
+		const message = error instanceof Error ? error.message : 'Unknown error';
+		console.error(`${logPrefix} Ask failed:`, message);
+		return c.json({ error: message }, 500);
+	}
+});
+
+app.route('/ask', ask);
 
 // OIDC endpoints for OpenCode GitHub Action token exchange
 const auth = new Hono<{ Bindings: Env }>();
@@ -128,16 +187,12 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
 			return new Response('OK', { status: 200 });
 		}
 
-		switch (event.name) {
-			case 'issue_comment':
-				await handleIssueComment(event.payload as IssueCommentEvent, env);
-				break;
-			case 'pull_request_review_comment':
-				await handlePRReviewComment(event.payload as PullRequestReviewCommentEvent, env);
-				break;
-			case 'schedule':
-				await handleScheduleEvent(event.payload as ScheduleEventPayload, env);
-				break;
+		// Route events to appropriate handlers based on type
+		const isUserEvent = USER_EVENTS.includes(event.name as (typeof USER_EVENTS)[number]);
+		if (isUserEvent) {
+			await handleUserEvent(event.name, event.payload, env);
+		} else {
+			await handleRepoEvent(event.name, event.payload, env);
 		}
 
 		return new Response('OK', { status: 200 });
@@ -147,13 +202,50 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
 	}
 }
 
-async function handleIssueComment(payload: IssueCommentEvent, env: Env): Promise<void> {
-	const installationId = payload.installation?.id;
+// User-driven events: issue comments, PR review comments, issues
+// These events are triggered by user actions and require:
+// - Write access check (for comment events)
+// - Reaction to acknowledge the request
+// - Rate limiting for non-write users (issues only)
+// All user events trigger GitHub Actions workflows
+async function handleUserEvent(eventName: string, payload: unknown, env: Env): Promise<void> {
+	const p = payload as { installation?: { id?: number } };
+	const installationId = p.installation?.id;
 	if (!installationId) {
 		console.error('No installation ID in payload');
 		return;
 	}
 
+	switch (eventName) {
+		case 'issue_comment':
+			await handleIssueComment(payload as IssueCommentEvent, env, installationId);
+			break;
+		case 'pull_request_review_comment':
+			await handlePRReviewComment(payload as PullRequestReviewCommentEvent, env, installationId);
+			break;
+		case 'issues':
+			await handleIssuesEvent(payload as IssuesEvent, env, installationId);
+			break;
+	}
+}
+
+// Repo-driven events: schedule, workflow_dispatch
+// These events are triggered by repository automation and:
+// - Have no triggering actor to check permissions for
+// - Have no comment to react to
+// - Are processed by the GitHub Action, not Bonk's sandbox
+async function handleRepoEvent(eventName: string, payload: unknown, env: Env): Promise<void> {
+	switch (eventName) {
+		case 'schedule':
+			await handleScheduleEvent(payload as ScheduleEventPayload, env);
+			break;
+		case 'workflow_dispatch':
+			await handleWorkflowDispatchEvent(payload as WorkflowDispatchPayload, env);
+			break;
+	}
+}
+
+async function handleIssueComment(payload: IssueCommentEvent, env: Env, installationId: number): Promise<void> {
 	const parsed = parseIssueCommentEvent(payload);
 	if (!parsed) return;
 
@@ -161,21 +253,14 @@ async function handleIssueComment(payload: IssueCommentEvent, env: Env): Promise
 		env,
 		installationId,
 		context: parsed.context,
-		prompt: parsed.prompt,
 		triggerCommentId: parsed.triggerCommentId,
-		commentType: 'issue_comment',
+		reactionTarget: 'issue_comment',
 		eventType: 'issue_comment',
 		commentTimestamp: payload.comment.created_at,
 	});
 }
 
-async function handlePRReviewComment(payload: PullRequestReviewCommentEvent, env: Env): Promise<void> {
-	const installationId = payload.installation?.id;
-	if (!installationId) {
-		console.error('No installation ID in payload');
-		return;
-	}
-
+async function handlePRReviewComment(payload: PullRequestReviewCommentEvent, env: Env, installationId: number): Promise<void> {
 	const parsed = parsePRReviewCommentEvent(payload);
 	if (!parsed) return;
 
@@ -183,9 +268,8 @@ async function handlePRReviewComment(payload: PullRequestReviewCommentEvent, env
 		env,
 		installationId,
 		context: parsed.context,
-		prompt: parsed.prompt,
 		triggerCommentId: parsed.triggerCommentId,
-		commentType: 'pull_request_review_comment',
+		reactionTarget: 'pull_request_review_comment',
 		eventType: 'pull_request_review_comment',
 		commentTimestamp: payload.comment.created_at,
 	});
@@ -205,14 +289,6 @@ async function handleScheduleEvent(payload: ScheduleEventPayload, env: Env): Pro
 	// Schedule events don't have an actor or issue context - they are processed by the
 	// GitHub Action (sst/opencode/github) which reads the prompt from the workflow file.
 	// Bonk's webhook handler acknowledges receipt but does not process these further.
-	//
-	// The workflow file should use the 'prompt' input to pass instructions to OpenCode.
-	// See: https://github.com/sst/opencode/pull/5810
-	//
-	// TODO: In future, track scheduled event success/failures by having opencode call our API
-	//
-	// TODO: Bonk to support non-GitHub tasks based on scheduled events - e.g. email,
-	// webhook or emitting metrics based on scheduled tasks
 }
 
 // Reply with helpful message when someone mentions Bonk in an unsupported event type
@@ -265,29 +341,22 @@ interface ProcessRequestParams {
 		headSha?: string;
 		isFork?: boolean;
 	};
-	prompt: string;
 	triggerCommentId: number;
-	commentType: CommentType;
+	reactionTarget: ReactionTarget;
 	eventType: string;
 	commentTimestamp: string;
-}
-
-function getBonkMode(env: Env): BonkMode {
-	return env.BONK_MODE ?? 'sandbox_sdk';
 }
 
 async function processRequest({
 	env,
 	installationId,
 	context,
-	prompt,
 	triggerCommentId,
-	commentType,
+	reactionTarget,
 	eventType,
 	commentTimestamp,
 }: ProcessRequestParams): Promise<void> {
 	const logPrefix = `[${context.owner}/${context.repo}#${context.issueNumber}]`;
-	const mode = getBonkMode(env);
 	const octokit = await createOctokit(env, installationId);
 
 	const canWrite = await hasWriteAccess(octokit, context.owner, context.repo, context.actor);
@@ -297,139 +366,77 @@ async function processRequest({
 	}
 
 	// Add thumbs up reaction to acknowledge the request
-	await createReaction(octokit, context.owner, context.repo, triggerCommentId, '+1', commentType);
+	await createReaction(octokit, context.owner, context.repo, triggerCommentId, '+1', reactionTarget);
 
-	if (mode === 'github_workflow') {
-		// Workflow mode: only react, don't comment unless there's a failure
-		console.info(`${logPrefix} Running in workflow mode`);
-		await runWorkflowMode(env, installationId, {
-			owner: context.owner,
-			repo: context.repo,
-			issueNumber: context.issueNumber,
-			defaultBranch: context.defaultBranch,
-			triggeringActor: context.actor,
-			eventType,
-			commentTimestamp,
-		});
-		return;
-	}
-
-	const responseCommentId = await createComment(octokit, context.owner, context.repo, context.issueNumber, 'Bonk is working on it...');
-	console.info(`${logPrefix} Created working comment: ${responseCommentId}, mode: ${mode}`);
-
-	await processSandboxRequest({
-		env,
-		installationId,
-		context,
-		prompt,
-		triggerCommentId,
-		commentType,
-		responseCommentId,
+	// Trigger GitHub Actions workflow - OpenCode runs in the workflow, not here
+	console.info(`${logPrefix} Triggering workflow for ${eventType}`);
+	await runWorkflowMode(env, installationId, {
+		owner: context.owner,
+		repo: context.repo,
+		issueNumber: context.issueNumber,
+		defaultBranch: context.defaultBranch,
+		triggeringActor: context.actor,
 		eventType,
 		commentTimestamp,
 	});
 }
 
-interface ProcessSandboxParams extends ProcessRequestParams {
-	responseCommentId: number;
-}
+// Handle issues events (opened/edited) for triage and automated workflows.
+// This is designed for GitHub Actions workflow mode where the workflow itself
+// defines the prompt via the `prompt` input and uses `default_agent` for a custom agent.
+//
+// Supported actions:
+// - opened: New issue created - always processed
+// - edited: Issue edited - only processed if body changed significantly (threshold %+) or has mention
+async function handleIssuesEvent(payload: IssuesEvent, env: Env, installationId: number): Promise<void> {
+	const editedThreshold = parseInt(env.EDITED_ISSUE_RUN_THRESHOLD_PC ?? "20", 10);
+	const parsed = parseIssuesEvent(payload, editedThreshold);
+	if (!parsed) return;
 
-async function processSandboxRequest({
-	env,
-	installationId,
-	context,
-	prompt,
-	triggerCommentId,
-	responseCommentId,
-}: ProcessSandboxParams): Promise<void> {
-	const logPrefix = `[${context.owner}/${context.repo}#${context.issueNumber}]`;
+	const logPrefix = `[${parsed.context.owner}/${parsed.context.repo}#${parsed.context.issueNumber}]`;
 	const octokit = await createOctokit(env, installationId);
-	const gql = await createGraphQL(env, installationId);
 
-	try {
-		const repoData = await getRepository(octokit, context.owner, context.repo);
-		const modelConfig = getModel(env);
-		const modelString = `${modelConfig.providerID}/${modelConfig.modelID}`;
-		const token = await getInstallationToken(env, installationId);
-		const { processedBody: processedPrompt, images } = await extractImages(prompt, token);
-
-		let dataContext: string;
-		if (context.isPullRequest) {
-			const prData = await fetchPullRequest(gql, context.owner, context.repo, context.issueNumber);
-			if (prData.headRepository.nameWithOwner !== prData.baseRepository.nameWithOwner) {
-				await updateComment(octokit, context.owner, context.repo, responseCommentId, 'Fork PRs are not supported.');
-				return;
-			}
-
-			context.headBranch = prData.headRefName;
-			context.headSha = prData.headRefOid;
-			dataContext = buildPRContext(prData, [triggerCommentId, responseCommentId]);
-		} else {
-			const issueData = await fetchIssue(gql, context.owner, context.repo, context.issueNumber);
-			dataContext = buildIssueContext(issueData, [triggerCommentId, responseCommentId]);
-		}
-
-		let result: SandboxResult;
-		let lastError: Error | null = null;
-		const maxRetries = 3;
-
-		for (let attempt = 1; attempt <= maxRetries; attempt++) {
-			try {
-				result = await runOpencodeSandbox({
-					env,
-					owner: context.owner,
-					repo: context.repo,
-					branch: context.headBranch ?? context.defaultBranch,
-					prompt: `${processedPrompt}\n\n${dataContext}`,
-					images,
-					modelConfig,
-					token,
-					isPrivate: repoData.private,
-					actor: context.actor,
-					isPullRequest: context.isPullRequest,
-					issueNumber: context.issueNumber,
-				});
-				lastError = null;
-				break;
-			} catch (error) {
-				lastError = error instanceof Error ? error : new Error(String(error));
-				console.error(`${logPrefix} Sandbox attempt ${attempt}/${maxRetries} failed:`, lastError.message);
-
-				if (attempt < maxRetries) {
-					await new Promise((resolve) => setTimeout(resolve, 15000));
-				}
-			}
-		}
-
-		if (lastError) {
-			console.error(`${logPrefix} Sandbox failed after all retries:`, lastError);
-			await updateComment(octokit, context.owner, context.repo, responseCommentId, `Bonk failed\n\n\`\`\`\n${lastError.message}\n\`\`\``);
+	// Rate limit users WITHOUT write access: 5 requests per 10 minutes per {owner}/{repo}+{username}
+	const canWrite = await hasWriteAccess(octokit, parsed.context.owner, parsed.context.repo, parsed.context.actor);
+	if (!canWrite) {
+		const rateLimitKey = `${parsed.context.owner}/${parsed.context.repo}+${parsed.context.actor}`;
+		const { success } = await env.RATE_LIMITER.limit({ key: rateLimitKey });
+		if (!success) {
+			console.info(`${logPrefix} Rate limited user ${parsed.context.actor}`);
 			return;
 		}
-
-		const response = formatResponse(result!.response, result!.changedFiles, result!.sessionLink, modelString);
-		console.info(`${logPrefix} Updating comment with response`);
-		await updateComment(octokit, context.owner, context.repo, responseCommentId, response);
-
-		if (!context.isPullRequest && result!.changedFiles && result!.changedFiles.length > 0 && result!.newBranch) {
-			console.info(`${logPrefix} Creating PR from branch ${result!.newBranch}`);
-			const prNumber = await createPullRequest(
-				octokit,
-				context.owner,
-				context.repo,
-				result!.newBranch,
-				context.defaultBranch,
-				result!.summary || `Fix issue #${context.issueNumber}`,
-				`${result!.response}\n\nCloses #${context.issueNumber}`,
-			);
-
-			const prLink = `https://github.com/${context.owner}/${context.repo}/pull/${prNumber}`;
-			console.info(`${logPrefix} Created PR #${prNumber}, updating comment`);
-			await updateComment(octokit, context.owner, context.repo, responseCommentId, `Bonk created PR: ${prLink}`);
-		}
-	} catch (error) {
-		console.error(`${logPrefix} Error processing request:`, error);
-		const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-		await updateComment(octokit, context.owner, context.repo, responseCommentId, `Bonk failed\n\n\`\`\`\n${errorMessage}\n\`\`\``);
 	}
+
+	// Add reaction to issue to acknowledge we're processing it
+	await createReaction(octokit, parsed.context.owner, parsed.context.repo, parsed.context.issueNumber, '+1', 'issue');
+
+	console.info(`${logPrefix} Triggering workflow for issues:${payload.action}`);
+	await runWorkflowMode(env, installationId, {
+		owner: parsed.context.owner,
+		repo: parsed.context.repo,
+		issueNumber: parsed.context.issueNumber,
+		defaultBranch: parsed.context.defaultBranch,
+		triggeringActor: parsed.context.actor,
+		eventType: 'issues',
+		commentTimestamp: payload.issue.created_at,
+		issueTitle: parsed.issueTitle,
+		issueBody: parsed.issueBody,
+	});
+}
+
+// Handle workflow_dispatch events for manual workflow triggers.
+// Similar to schedule events, the prompt comes from the workflow file's `prompt` input.
+async function handleWorkflowDispatchEvent(payload: WorkflowDispatchPayload, env: Env): Promise<void> {
+	const parsed = parseWorkflowDispatchEvent(payload);
+	if (!parsed) {
+		console.error('Invalid workflow_dispatch event payload');
+		return;
+	}
+
+	const logPrefix = `[${parsed.owner}/${parsed.repo}]`;
+	console.info(`${logPrefix} Received workflow_dispatch event from ${parsed.sender}`);
+
+	// workflow_dispatch events are processed by the GitHub Action (sst/opencode/github)
+	// which reads the prompt from the workflow file inputs.
+	// Bonk's webhook handler acknowledges receipt but does not process these further.
 }

@@ -1,6 +1,6 @@
 import type { Octokit } from "@octokit/rest";
 import { getAgentByName } from "agents";
-import type { Env } from "./types";
+import { DEFAULT_MODEL, type Env } from "./types";
 import type { RepoAgent } from "./agent";
 import {
 	createOctokit,
@@ -26,6 +26,9 @@ export interface WorkflowContext {
 	triggeringActor: string;
 	eventType: string;
 	commentTimestamp: string;
+	// For issues:opened events, include the issue content
+	issueTitle?: string;
+	issueBody?: string;
 }
 
 export interface WorkflowResult {
@@ -36,7 +39,6 @@ export interface WorkflowResult {
 
 const BOT_MENTION = "@ask-bonk";
 const BOT_COMMAND = "/bonk";
-const DEFAULT_MODEL = "opencode/claude-opus-4-5";
 
 function generateWorkflowContent(): string {
 	return workflowTemplate

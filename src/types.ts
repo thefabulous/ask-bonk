@@ -1,21 +1,39 @@
 import type { Sandbox } from "@cloudflare/sandbox";
 import type { AgentNamespace } from "agents";
+import type { Config } from "@opencode-ai/sdk";
 import type { RepoAgent } from "./agent";
 
-// Bonk operational mode
-export type BonkMode = "sandbox_sdk" | "github_workflow";
+// Default model used across the application when no model is specified
+export const DEFAULT_MODEL = "opencode/claude-opus-4-5";
 
 // Environment bindings
 export interface Env {
 	Sandbox: DurableObjectNamespace<Sandbox>;
 	REPO_AGENT: AgentNamespace<RepoAgent>;
 	APP_INSTALLATIONS: KVNamespace;
+	RATE_LIMITER: RateLimit;
 	GITHUB_APP_ID: string;
 	GITHUB_APP_PRIVATE_KEY: string;
 	GITHUB_WEBHOOK_SECRET: string;
 	OPENCODE_API_KEY: string;
 	DEFAULT_MODEL?: string;
-	BONK_MODE?: BonkMode;
+	EDITED_ISSUE_RUN_THRESHOLD_PC?: string;
+	// Shared secret for /ask endpoint - empty means endpoint is disabled
+	ASK_SECRET?: string;
+}
+
+// Request body for /ask endpoint
+// Runs OpenCode in the sandbox and returns SSE response
+export interface AskRequest {
+	// ULID assigned when request is received - used for tracing
+	id: string;
+	owner: string;
+	repo: string;
+	prompt: string;
+	agent?: string;
+	model?: string;
+	// Valid opencode.json/jsonc config to pass into the OpenCode session
+	config?: Config;
 }
 
 
@@ -169,4 +187,43 @@ export interface ScheduledEventContext {
 	defaultBranch: string;
 	schedule: string;
 	workflow: string | null;
+}
+
+// Context for workflow_dispatch events (manual trigger, has sender but no issue/PR)
+export interface WorkflowDispatchContext {
+	owner: string;
+	repo: string;
+	isPrivate: boolean;
+	defaultBranch: string;
+	ref: string;
+	sender: string;
+	inputs: Record<string, string>;
+	workflow: string | null;
+}
+
+// GitHub schedule event payload structure (minimal type: only fields we use)
+export interface ScheduleEventPayload {
+	schedule: string;
+	repository: {
+		owner: { login: string };
+		name: string;
+		private: boolean;
+		default_branch: string;
+	};
+	workflow?: string;
+}
+
+// GitHub workflow_dispatch event payload structure (minimal type: only fields we use)
+export interface WorkflowDispatchPayload {
+	// inputs can be null if workflow defines no inputs
+	inputs?: Record<string, string>;
+	ref: string;
+	repository: {
+		owner: { login: string };
+		name: string;
+		private: boolean;
+		default_branch: string;
+	};
+	sender: { login: string };
+	workflow?: string;
 }

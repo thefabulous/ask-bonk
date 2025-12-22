@@ -5,11 +5,16 @@ import {
 	parseIssueCommentEvent,
 	parsePRReviewCommentEvent,
 	parseScheduleEvent,
+	parseIssuesEvent,
+	parseWorkflowDispatchEvent,
+	calculateChangePercent,
+	hasSignificantChange,
 	getModel,
 	formatResponse,
 	generateBranchName,
-	type ScheduleEventPayload,
 } from "../src/events";
+import type { ScheduleEventPayload, WorkflowDispatchPayload } from "../src/types";
+import type { IssuesEvent } from "@octokit/webhooks-types";
 import { extractRepoFromClaims } from "../src/oidc";
 import type { Env } from "../src/types";
 import type {
@@ -26,6 +31,7 @@ const mockEnv: Env = {
 	Sandbox: {} as Env["Sandbox"],
 	REPO_AGENT: {} as Env["REPO_AGENT"],
 	APP_INSTALLATIONS: {} as Env["APP_INSTALLATIONS"],
+	RATE_LIMITER: {} as Env["RATE_LIMITER"],
 	GITHUB_APP_ID: "123",
 	GITHUB_APP_PRIVATE_KEY: "test-key",
 	GITHUB_WEBHOOK_SECRET: "test-secret",
@@ -166,8 +172,8 @@ describe("Model Configuration", () => {
 	it("returns hardcoded default when no DEFAULT_MODEL", () => {
 		const envWithoutDefault = { ...mockEnv, DEFAULT_MODEL: undefined };
 		const model = getModel(envWithoutDefault);
-		expect(model.providerID).toBe("anthropic");
-		expect(model.modelID).toBe("claude-sonnet-4-20250514");
+		expect(model.providerID).toBe("opencode");
+		expect(model.modelID).toBe("claude-opus-4-5");
 	});
 });
 
@@ -227,7 +233,6 @@ describe("Schedule Event Parsing", () => {
 			private: false,
 			default_branch: "main",
 		},
-		installation: { id: 12345 },
 		workflow: "weekly-deps-update.yml",
 	};
 
@@ -255,6 +260,232 @@ describe("Schedule Event Parsing", () => {
 
 		expect(result).not.toBeNull();
 		expect(result?.workflow).toBeNull();
+	});
+});
+
+describe("Issues Event Parsing", () => {
+	const baseIssuesPayload = {
+		action: "opened",
+		issue: {
+			number: 42,
+			title: "Test Issue",
+			body: "Issue body content",
+			user: { login: "testuser" },
+			created_at: "2025-01-01T00:00:00Z",
+		},
+		repository: {
+			owner: { login: "test-owner" },
+			name: "test-repo",
+			private: false,
+			default_branch: "main",
+		},
+		sender: { login: "testuser" },
+		installation: { id: 12345 },
+	} as unknown as IssuesEvent;
+
+	it("parses issues:opened event", () => {
+		const result = parseIssuesEvent(baseIssuesPayload);
+
+		expect(result).not.toBeNull();
+		expect(result?.context.owner).toBe("test-owner");
+		expect(result?.context.repo).toBe("test-repo");
+		expect(result?.context.issueNumber).toBe(42);
+		expect(result?.context.actor).toBe("testuser");
+		expect(result?.issueTitle).toBe("Test Issue");
+		expect(result?.issueBody).toBe("Issue body content");
+	});
+
+	it("parses issues:edited event with completely different body", () => {
+		// hasMention check removed - this passes because the body changed >20%
+		const payload = {
+			...baseIssuesPayload,
+			action: "edited",
+			issue: {
+				...baseIssuesPayload.issue,
+				body: "/bonk please review this",
+			},
+			changes: { body: { from: "Old body" } },
+		} as unknown as IssuesEvent;
+
+		const result = parseIssuesEvent(payload);
+		expect(result).not.toBeNull();
+		expect(result?.issueBody).toBe("/bonk please review this");
+	});
+
+	it("parses issues:edited event with significant word changes", () => {
+		const payload = {
+			...baseIssuesPayload,
+			action: "edited",
+			issue: {
+				...baseIssuesPayload.issue,
+				body: "Completely different content that is nothing like the original",
+			},
+			changes: { body: { from: "Short original" } },
+		} as unknown as IssuesEvent;
+
+		const result = parseIssuesEvent(payload);
+		expect(result).not.toBeNull();
+	});
+
+	it("rejects issues:edited event with insignificant change", () => {
+		// Very similar text (only minor word change) - should be below 20% threshold
+		const longText = "This is a detailed issue description with multiple sentences. " +
+			"It describes the problem in great detail and provides context. " +
+			"The user has explained what they expected and what happened instead.";
+		const slightlyModified = "This is a detailed issue description with multiple sentences. " +
+			"It describes the problem in great detail and provides context. " +
+			"The user has explained what they expected and what occurred instead."; // changed 'happened' to 'occurred'
+		
+		const payload = {
+			...baseIssuesPayload,
+			action: "edited",
+			issue: {
+				...baseIssuesPayload.issue,
+				body: slightlyModified,
+			},
+			changes: { body: { from: longText } },
+		} as unknown as IssuesEvent;
+
+		const result = parseIssuesEvent(payload);
+		expect(result).toBeNull();
+	});
+
+	it("rejects unsupported issue actions", () => {
+		const payload = {
+			...baseIssuesPayload,
+			action: "deleted",
+		} as unknown as IssuesEvent;
+
+		const result = parseIssuesEvent(payload);
+		expect(result).toBeNull();
+	});
+});
+
+describe("Workflow Dispatch Event Parsing", () => {
+	const validPayload: WorkflowDispatchPayload = {
+		inputs: { prompt: "Run weekly update" },
+		ref: "refs/heads/main",
+		repository: {
+			owner: { login: "test-owner" },
+			name: "test-repo",
+			private: false,
+			default_branch: "main",
+		},
+		sender: { login: "testuser" },
+		workflow: "bonk.yml",
+	};
+
+	it("parses valid workflow_dispatch event", () => {
+		const result = parseWorkflowDispatchEvent(validPayload);
+
+		expect(result).not.toBeNull();
+		expect(result?.owner).toBe("test-owner");
+		expect(result?.repo).toBe("test-repo");
+		expect(result?.sender).toBe("testuser");
+		expect(result?.ref).toBe("refs/heads/main");
+		expect(result?.inputs.prompt).toBe("Run weekly update");
+	});
+
+	it("returns null for missing ref", () => {
+		const payload = { ...validPayload, ref: "" };
+		const result = parseWorkflowDispatchEvent(payload as WorkflowDispatchPayload);
+		expect(result).toBeNull();
+	});
+});
+
+describe("Change Percent Calculation", () => {
+	it("returns 0 for identical strings", () => {
+		expect(calculateChangePercent("hello world", "hello world")).toBe(0);
+	});
+
+	it("returns 100 for completely different strings", () => {
+		expect(calculateChangePercent("hello world", "foo bar baz")).toBe(100);
+	});
+
+	it("returns 100 when one string is empty", () => {
+		expect(calculateChangePercent("hello", "")).toBe(100);
+		expect(calculateChangePercent("", "hello")).toBe(100);
+	});
+
+	it("returns 0 for two empty strings", () => {
+		expect(calculateChangePercent("", "")).toBe(0);
+	});
+
+	it("calculates partial change correctly", () => {
+		const percent = calculateChangePercent("one two three four", "one two five six");
+		expect(percent).toBeGreaterThan(0);
+		expect(percent).toBeLessThan(100);
+	});
+});
+
+describe("Significant Change Detection", () => {
+	it("detects significant change above threshold", () => {
+		expect(hasSignificantChange("short", "completely different longer text")).toBe(true);
+	});
+
+	it("rejects insignificant change below threshold", () => {
+		// Long text with only minor changes should be below 20% threshold
+		const original = "This is a detailed issue description that has many words and sentences providing context for the problem";
+		const modified = "This is a detailed issue description that has many words and sentences providing context for the issue"; // just 'problem' -> 'issue'
+		expect(hasSignificantChange(original, modified)).toBe(false);
+	});
+
+	it("treats missing old body as significant", () => {
+		expect(hasSignificantChange(undefined, "new content")).toBe(true);
+	});
+
+	it("treats missing new body as significant", () => {
+		expect(hasSignificantChange("old content", undefined)).toBe(true);
+	});
+});
+
+describe("Model Parsing Edge Cases", () => {
+	it("handles model with nested slashes", () => {
+		const envWithNestedModel = { ...mockEnv, DEFAULT_MODEL: "opencode/claude-3-5-sonnet-v2" };
+		const model = getModel(envWithNestedModel);
+		expect(model.providerID).toBe("opencode");
+		expect(model.modelID).toBe("claude-3-5-sonnet-v2");
+	});
+
+	it("throws on invalid model format without slash", () => {
+		const envWithBadModel = { ...mockEnv, DEFAULT_MODEL: "invalid-model" };
+		expect(() => getModel(envWithBadModel)).toThrow("Invalid model");
+	});
+});
+
+describe("Issues Event Edge Cases", () => {
+	const basePayload = {
+		action: "edited",
+		issue: {
+			number: 1,
+			title: "Test",
+			body: "new content",
+			user: { login: "user" },
+			created_at: "2025-01-01T00:00:00Z",
+		},
+		repository: {
+			owner: { login: "owner" },
+			name: "repo",
+			private: false,
+			default_branch: "main",
+		},
+		sender: { login: "user" },
+		changes: { body: { from: "old content" } },
+	} as unknown as IssuesEvent;
+
+	it("rejects change below custom threshold", () => {
+		// "old content" -> "new content" is ~50% change (1 of 2 words changed)
+		// With 90% threshold, 50% change is NOT significant -> returns null
+		const result = parseIssuesEvent(basePayload, 90);
+		expect(result).toBeNull();
+	});
+
+	it("accepts change above custom threshold", () => {
+		// "old content" -> "new content" is ~50% change
+		// With 40% threshold, 50% change IS significant -> returns result
+		const result = parseIssuesEvent(basePayload, 40);
+		expect(result).not.toBeNull();
+		expect(result?.issueBody).toBe("new content");
 	});
 });
 

@@ -123,43 +123,52 @@ export async function updateComment(octokit: Octokit, owner: string, repo: strin
 }
 
 export type ReactionContent = '+1' | '-1' | 'laugh' | 'confused' | 'heart' | 'hooray' | 'rocket' | 'eyes';
-export type CommentType = 'issue_comment' | 'pull_request_review_comment' | 'pull_request_review';
+export type ReactionTarget = 'issue_comment' | 'pull_request_review_comment' | 'pull_request_review' | 'issue';
 
-// Creates a reaction on a comment. Silently fails if the API call fails.
-// issue_comment uses the issue comment reactions API, pull_request_review_comment uses the PR review comment API.
+// Creates a reaction on a comment or issue. Silently fails if the API call fails.
+// Supports: issue_comment, pull_request_review_comment, issue (the issue itself)
 // pull_request_review (the overall review, not inline comments) does NOT support reactions via the REST API, so we skip it.
 export async function createReaction(
 	octokit: Octokit,
 	owner: string,
 	repo: string,
-	commentId: number,
+	targetId: number,
 	content: ReactionContent,
-	commentType: CommentType,
+	targetType: ReactionTarget,
 ): Promise<void> {
 	try {
-		if (commentType === 'pull_request_review') {
-			// PR reviews (the overall review submission) don't support reactions via REST API
-			console.info(`Skipping reaction for pull_request_review ${commentId} - not supported by GitHub API`);
-			return;
-		}
-
-		if (commentType === 'pull_request_review_comment') {
-			await octokit.reactions.createForPullRequestReviewComment({
-				owner,
-				repo,
-				comment_id: commentId,
-				content,
-			});
-		} else {
-			await octokit.reactions.createForIssueComment({
-				owner,
-				repo,
-				comment_id: commentId,
-				content,
-			});
+		switch (targetType) {
+			case 'pull_request_review':
+				// PR reviews (the overall review submission) don't support reactions via REST API
+				console.info(`Skipping reaction for pull_request_review ${targetId} - not supported by GitHub API`);
+				return;
+			case 'pull_request_review_comment':
+				await octokit.reactions.createForPullRequestReviewComment({
+					owner,
+					repo,
+					comment_id: targetId,
+					content,
+				});
+				break;
+			case 'issue':
+				await octokit.reactions.createForIssue({
+					owner,
+					repo,
+					issue_number: targetId,
+					content,
+				});
+				break;
+			case 'issue_comment':
+				await octokit.reactions.createForIssueComment({
+					owner,
+					repo,
+					comment_id: targetId,
+					content,
+				});
+				break;
 		}
 	} catch (error) {
-		console.error(`Failed to create reaction for ${commentType} ${commentId}:`, error);
+		console.error(`Failed to create reaction for ${targetType} ${targetId}:`, error);
 	}
 }
 
@@ -530,3 +539,4 @@ export async function getWorkflowRunStatus(
 		conclusion: response.data.conclusion,
 	};
 }
+
