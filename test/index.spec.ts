@@ -4,9 +4,11 @@ import {
 	extractPrompt,
 	parseIssueCommentEvent,
 	parsePRReviewCommentEvent,
+	parseScheduleEvent,
 	getModel,
 	formatResponse,
 	generateBranchName,
+	type ScheduleEventPayload,
 } from "../src/events";
 import { extractRepoFromClaims } from "../src/oidc";
 import type { Env } from "../src/types";
@@ -22,7 +24,7 @@ import prReviewCommentFixture from "./fixtures/pr-review-comment.json";
 // Mock env for model tests
 const mockEnv: Env = {
 	Sandbox: {} as Env["Sandbox"],
-	REPO_ACTOR: {} as Env["REPO_ACTOR"],
+	REPO_AGENT: {} as Env["REPO_AGENT"],
 	APP_INSTALLATIONS: {} as Env["APP_INSTALLATIONS"],
 	GITHUB_APP_ID: "123",
 	GITHUB_APP_PRIVATE_KEY: "test-key",
@@ -213,6 +215,46 @@ describe("Branch Name Generation", () => {
 	it("generates PR branch name", () => {
 		const branch = generateBranchName("pr", 99);
 		expect(branch).toMatch(/^bonk\/pr99-\d{14}$/);
+	});
+});
+
+describe("Schedule Event Parsing", () => {
+	const validSchedulePayload: ScheduleEventPayload = {
+		schedule: "0 4 * * 5",
+		repository: {
+			owner: { login: "test-owner" },
+			name: "test-repo",
+			private: false,
+			default_branch: "main",
+		},
+		installation: { id: 12345 },
+		workflow: "weekly-deps-update.yml",
+	};
+
+	it("parses valid schedule event", () => {
+		const result = parseScheduleEvent(validSchedulePayload);
+
+		expect(result).not.toBeNull();
+		expect(result?.owner).toBe("test-owner");
+		expect(result?.repo).toBe("test-repo");
+		expect(result?.isPrivate).toBe(false);
+		expect(result?.defaultBranch).toBe("main");
+		expect(result?.schedule).toBe("0 4 * * 5");
+		expect(result?.workflow).toBe("weekly-deps-update.yml");
+	});
+
+	it("returns null for missing schedule field", () => {
+		const payload = { ...validSchedulePayload, schedule: "" };
+		const result = parseScheduleEvent(payload as ScheduleEventPayload);
+		expect(result).toBeNull();
+	});
+
+	it("handles missing workflow field", () => {
+		const payload = { ...validSchedulePayload, workflow: undefined };
+		const result = parseScheduleEvent(payload);
+
+		expect(result).not.toBeNull();
+		expect(result?.workflow).toBeNull();
 	});
 });
 

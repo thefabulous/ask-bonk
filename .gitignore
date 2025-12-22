@@ -165,3 +165,6 @@ dist
 .env*
 !.env.example
 .wrangler/
+
+# npm lockfile - we use bun
+package-lock.json

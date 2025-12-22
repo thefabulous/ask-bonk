@@ -160,3 +160,13 @@ export interface ReviewCommentContext {
 	commitId: string;
 	originalCommitId: string;
 }
+
+// Context for scheduled events (no actor, no issue/PR)
+export interface ScheduledEventContext {
+	owner: string;
+	repo: string;
+	isPrivate: boolean;
+	defaultBranch: string;
+	schedule: string;
+	workflow: string | null;
+}

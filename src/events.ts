@@ -3,7 +3,7 @@ import type {
 	PullRequestReviewCommentEvent,
 	PullRequestReviewEvent,
 } from "@octokit/webhooks-types";
-import type { Env, EventContext, ReviewCommentContext } from "./types";
+import type { Env, EventContext, ReviewCommentContext, ScheduledEventContext } from "./types";
 
 const BOT_MENTION = "@ask-bonk";
 const BOT_COMMAND = "/bonk";
@@ -219,4 +219,32 @@ export function generateBranchName(type: "issue" | "pr", issueNumber: number): s
 		.split("T")
 		.join("");
 	return `bonk/${type}${issueNumber}-${timestamp}`;
+}
+
+// GitHub schedule event payload structure
+export interface ScheduleEventPayload {
+	schedule: string;
+	repository: {
+		owner: { login: string };
+		name: string;
+		private: boolean;
+		default_branch: string;
+	};
+	installation?: { id: number };
+	workflow?: string;
+}
+
+export function parseScheduleEvent(payload: ScheduleEventPayload): ScheduledEventContext | null {
+	if (!payload.schedule || !payload.repository) {
+		return null;
+	}
+
+	return {
+		owner: payload.repository.owner.login,
+		repo: payload.repository.name,
+		isPrivate: payload.repository.private,
+		defaultBranch: payload.repository.default_branch,
+		schedule: payload.schedule,
+		workflow: payload.workflow ?? null,
+	};
 }

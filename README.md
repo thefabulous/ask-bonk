@@ -54,6 +54,46 @@ Or use the slash command:
 - `@ask-bonk fix the failing tests` - Let Bonk make changes and push commits
 - `/bonk add documentation for the API endpoints` - Generate documentation
 
+### Events
+
+Bonk can respond to the following GitHub webhook events:
+
+| Event | Trigger | Description |
+|-------|---------|-------------|
+| `issue_comment` | `/bonk` or `@ask-bonk` in issue/PR comment | Responds to mentions in issue and PR comments |
+| `pull_request_review_comment` | `/bonk` or `@ask-bonk` in PR review comment | Responds to mentions in PR line comments |
+| `schedule` | Cron schedule in workflow | Runs automated tasks on a schedule (prompt via workflow file) |
+
+#### Scheduled Tasks
+
+Scheduled events use the `prompt` input in your workflow file:
+
+```yaml
+on:
+  schedule:
+    - cron: "0 4 * * 5"  # Friday at 4AM UTC
+
+jobs:
+  update-deps:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: sst/opencode/github@dev
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        with:
+          model: opencode/claude-opus-4-5
+          oidc_base_url: "https://ask-bonk.silverlock.workers.dev/auth"
+          prompt: |
+            Update all dependencies to their latest compatible versions.
+            Run tests and type-check after updating.
+```
+
 ## Config
 
 ### Defaults

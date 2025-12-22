@@ -19,18 +19,19 @@ import {
 	createReaction,
 	type CommentType,
 } from './github';
-import { parseIssueCommentEvent, parsePRReviewCommentEvent, getModel, formatResponse, hasMention } from './events';
+import { parseIssueCommentEvent, parsePRReviewCommentEvent, parseScheduleEvent, getModel, formatResponse, hasMention, type ScheduleEventPayload } from './events';
 import { extractImages } from './images';
 import { runOpencodeSandbox, type SandboxResult } from './sandbox';
 import { runWorkflowMode } from './workflow';
 import { handleGetInstallation, handleExchangeToken, handleExchangeTokenWithPAT } from './oidc';
+import { RepoAgent } from './agent';
 
 export { Sandbox } from '@cloudflare/sandbox';
-export { RepoAgent } from './agent';
+export { RepoAgent };
 
 const GITHUB_REPO_URL = 'https://github.com/elithrar/ask-bonk';
 
-const SUPPORTED_EVENTS = ['issue_comment', 'pull_request_review_comment'] as const;
+const SUPPORTED_EVENTS = ['issue_comment', 'pull_request_review_comment', 'schedule'] as const;
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -134,6 +135,9 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
 			case 'pull_request_review_comment':
 				await handlePRReviewComment(event.payload as PullRequestReviewCommentEvent, env);
 				break;
+			case 'schedule':
+				await handleScheduleEvent(event.payload as ScheduleEventPayload, env);
+				break;
 		}
 
 		return new Response('OK', { status: 200 });
@@ -185,6 +189,30 @@ async function handlePRReviewComment(payload: PullRequestReviewCommentEvent, env
 		eventType: 'pull_request_review_comment',
 		commentTimestamp: payload.comment.created_at,
 	});
+}
+
+// Schedule events are handled by the GitHub Action directly - Bonk webhook just acknowledges
+async function handleScheduleEvent(payload: ScheduleEventPayload, env: Env): Promise<void> {
+	const parsed = parseScheduleEvent(payload);
+	if (!parsed) {
+		console.error('Invalid schedule event payload');
+		return;
+	}
+
+	const logPrefix = `[${parsed.owner}/${parsed.repo}]`;
+	console.info(`${logPrefix} Received schedule event: ${parsed.schedule}`);
+
+	// Schedule events don't have an actor or issue context - they are processed by the
+	// GitHub Action (sst/opencode/github) which reads the prompt from the workflow file.
+	// Bonk's webhook handler acknowledges receipt but does not process these further.
+	//
+	// The workflow file should use the 'prompt' input to pass instructions to OpenCode.
+	// See: https://github.com/sst/opencode/pull/5810
+	//
+	// TODO: In future, track scheduled event success/failures by having opencode call our API
+	//
+	// TODO: Bonk to support non-GitHub tasks based on scheduled events - e.g. email,
+	// webhook or emitting metrics based on scheduled tasks
 }
 
 // Reply with helpful message when someone mentions Bonk in an unsupported event type
