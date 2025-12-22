@@ -33,7 +33,7 @@ On first mention, Bonk will create a PR to add the workflow file to your repo.
           model: anthropic/claude-sonnet-4-20250514
 ```
 
-## Usage
+## GitHub Workflows
 
 Mention the bot in any issue or PR:
 
@@ -145,6 +145,33 @@ jobs:
             Update all dependencies to their latest compatible versions.
             Run tests and type-check after updating.
 ```
+
+## `/ask` Sandbox Mode
+
+For programmatic access, Bonk exposes an `/ask` endpoint that runs OpenCode directly in a Cloudflare Sandbox. This allows you to integrate Bonk into your own workflows, scripts, or applications without going through GitHub issues and PRs.
+
+When you make a request to `/ask`:
+1. Bonk clones your repository into an isolated sandbox
+2. Runs OpenCode with your prompt against the codebase
+3. Returns the response as a Server-Sent Events (SSE) stream
+
+The endpoint requires bearer authentication and only works with repositories that have the Bonk GitHub App installed.
+
+```bash
+curl -N https://ask-bonk.silverlock.workers.dev/ask \
+  -H "Authorization: Bearer $ASK_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "owner": "your-org",
+    "repo": "your-repo",
+    "prompt": "Explain how the authentication system works"
+  }'
+```
+
+Optional fields:
+- `model` - Override the default model (e.g., `"anthropic/claude-sonnet-4-20250514"`)
+- `agent` - Use a specific OpenCode agent
+- `config` - Pass custom OpenCode configuration
 
 ## Config
 
