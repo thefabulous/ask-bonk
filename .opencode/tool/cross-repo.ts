@@ -175,8 +175,16 @@ async function getTargetRepoToken(owner: string, repo: string): Promise<{ token:
 	const { value: oidcToken } = (await oidcResponse.json()) as { value: string }
 
 	// Exchange OIDC token for installation token via Bonk API
-	const bonkApiUrl = process.env.BONK_API_URL || "https://bonk.sst.dev"
-	const exchangeResponse = await fetch(`${bonkApiUrl}/auth/exchange_github_app_token_for_repo`, {
+	// OIDC_BASE_URL is set by the OpenCode GitHub Action from the oidc_base_url workflow input
+	// It already includes the /auth path, e.g. "https://ask-bonk.silverlock.workers.dev/auth"
+	const oidcBaseUrl = process.env.OIDC_BASE_URL
+	if (!oidcBaseUrl) {
+		return {
+			error:
+				"OIDC_BASE_URL environment variable not set. Ensure the workflow passes oidc_base_url to the OpenCode action.",
+		}
+	}
+	const exchangeResponse = await fetch(`${oidcBaseUrl}/exchange_github_app_token_for_repo`, {
 		method: "POST",
 		headers: {
 			Authorization: `Bearer ${oidcToken}`,
