@@ -22,7 +22,9 @@ Use this tool when you need to:
 - Open PRs in related repositories based on changes in the current repo
 - Summarize changes from the current repo and apply related changes to another repo
 
-The tool handles authentication automatically via Bonk's OIDC API - you just need to specify the target owner/repo.
+The tool handles authentication automatically:
+- In GitHub Actions (with id-token: write): Uses Bonk's OIDC API for secure token exchange
+- Outside GitHub Actions: Uses gh CLI authentication or GH_TOKEN/GITHUB_TOKEN env var
 
 Supported operations:
 - clone: Shallow clone a repo to /tmp/<owner>-<repo>. Returns the local path.
@@ -40,13 +42,17 @@ Typical workflow:
 5. push the branch
 6. pr to create a pull request
 
-Prerequisites:
+Prerequisites (GitHub Actions mode):
 - The Bonk GitHub App must be installed on the target repository
-- The current workflow must have OIDC token permissions (id-token: write)
-- The target repository must be in the same organization/user as the source repository
-- The actor who triggered the workflow must have write access to the target repository
+- The workflow must have 'id-token: write' permission
+- The target repo must be in the same org as the source repo
+- The actor must have write access to the target repository
 
-Security: The token is scoped to only the target repository with minimal permissions (contents:write, pull_requests:write, issues:write).`,
+Prerequisites (local/other environments):
+- Authenticated via 'gh auth login' with appropriate permissions, or
+- GH_TOKEN/GITHUB_TOKEN env var set with appropriate permissions
+
+Security: In GitHub Actions, the token is scoped to only the target repository with minimal permissions (contents:write, pull_requests:write, issues:write).`,
 
 	args: {
 		owner: tool.schema.string().describe("Repository owner (org or user)"),
@@ -157,18 +163,26 @@ Security: The token is scoped to only the target repository with minimal permiss
 	},
 })
 
-// Get installation token for target repo via Bonk's OIDC API
-async function getTargetRepoToken(owner: string, repo: string): Promise<{ token: string } | { error: string }> {
-	// Get OIDC token from GitHub Actions environment
+// Check if running in GitHub Actions
+function isGitHubActions(): boolean {
+	return process.env.GITHUB_ACTIONS === "true"
+}
+
+// Check if OIDC permissions are available
+function hasOIDCPermissions(): boolean {
+	return !!(process.env.ACTIONS_ID_TOKEN_REQUEST_URL && process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN)
+}
+
+// Try to get token from gh CLI
+async function getGhCliToken(): Promise<string | null> {
+	const result = await run("gh auth token")
+	return result.success ? result.stdout.trim() : null
+}
+
+// Get token via GitHub Actions OIDC exchange
+async function getTokenViaOIDC(owner: string, repo: string): Promise<{ token: string } | { error: string }> {
 	const tokenUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL
 	const tokenRequestToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN
-
-	if (!tokenUrl || !tokenRequestToken) {
-		return {
-			error:
-				"GitHub Actions OIDC not available. Ensure workflow has 'id-token: write' permission and is running in GitHub Actions.",
-		}
-	}
 
 	// Request OIDC token with custom audience for Bonk
 	const oidcUrl = `${tokenUrl}&audience=opencode-github-action`
@@ -213,6 +227,31 @@ async function getTargetRepoToken(owner: string, repo: string): Promise<{ token:
 
 	const { token } = (await exchangeResponse.json()) as { token: string }
 	return { token }
+}
+
+// Get token for target repo - tries multiple auth strategies
+async function getTargetRepoToken(owner: string, repo: string): Promise<{ token: string } | { error: string }> {
+	// Strategy 1: GitHub Actions OIDC (highest priority when in Actions with permissions)
+	if (isGitHubActions() && hasOIDCPermissions()) {
+		return await getTokenViaOIDC(owner, repo)
+	}
+
+	// Strategy 2: gh CLI auth (most common local setup)
+	const ghToken = await getGhCliToken()
+	if (ghToken) {
+		return { token: ghToken }
+	}
+
+	// Strategy 3: Environment variable token (fallback)
+	const envToken = process.env.GH_TOKEN || process.env.GITHUB_TOKEN
+	if (envToken) {
+		return { token: envToken }
+	}
+
+	return {
+		error:
+			"No authentication available. Authenticate with 'gh auth login', set GH_TOKEN/GITHUB_TOKEN, or run in GitHub Actions with id-token: write permission.",
+	}
 }
 
 
