@@ -28,6 +28,9 @@ The tool handles authentication automatically:
 
 Supported operations:
 - clone: Shallow clone a repo to /tmp/<owner>-<repo>. Returns the local path.
+- read: Read a file from the cloned repo (path relative to repo root).
+- write: Write content to a file in the cloned repo (path relative to repo root).
+- list: List files in the cloned repo (optionally under a subpath).
 - branch: Create and checkout a new branch from the default branch.
 - commit: Stage all changes and commit with a message.
 - push: Push the current branch to remote.
@@ -36,7 +39,7 @@ Supported operations:
 
 Typical workflow:
 1. clone the target repo
-2. Use standard file tools (read, write, edit) on files in the cloned path
+2. Use read/write/list operations to view and modify files
 3. branch to create a feature branch
 4. commit your changes
 5. push the branch
@@ -58,7 +61,7 @@ Security: In GitHub Actions, the token is scoped to only the target repository w
 		owner: tool.schema.string().describe("Repository owner (org or user)"),
 		repo: tool.schema.string().describe("Repository name"),
 		operation: tool.schema
-			.enum(["clone", "branch", "commit", "push", "pr", "exec"])
+			.enum(["clone", "branch", "commit", "push", "pr", "exec", "read", "write", "list"])
 			.describe("Operation to perform on the target repository"),
 
 		// Operation-specific args
@@ -73,6 +76,8 @@ Security: In GitHub Actions, the token is scoped to only the target repository w
 		title: tool.schema.string().optional().describe("PR title for 'pr' operation"),
 		base: tool.schema.string().optional().describe("Base branch for PR (defaults to repo's default branch)"),
 		command: tool.schema.string().optional().describe("Shell command to execute for 'exec' operation"),
+		path: tool.schema.string().optional().describe("File path for 'read', 'write', or 'list' operations (relative to repo root)"),
+		content: tool.schema.string().optional().describe("File content for 'write' operation"),
 	},
 
 	async execute(args) {
@@ -151,6 +156,48 @@ Security: In GitHub Actions, the token is scoped to only the target repository w
 						return stringify({ success: false, error: "Command required for 'exec' operation" })
 					}
 					return stringify(await execCommand(state.path, args.command))
+				}
+
+				case "read": {
+					const state = clonedRepos.get(repoKey)
+					if (!state) {
+						return stringify({
+							success: false,
+							error: `Repository ${repoKey} not cloned. Run clone operation first.`,
+						})
+					}
+					if (!args.path) {
+						return stringify({ success: false, error: "Path required for 'read' operation" })
+					}
+					return stringify(await readFile(state.path, args.path))
+				}
+
+				case "write": {
+					const state = clonedRepos.get(repoKey)
+					if (!state) {
+						return stringify({
+							success: false,
+							error: `Repository ${repoKey} not cloned. Run clone operation first.`,
+						})
+					}
+					if (!args.path) {
+						return stringify({ success: false, error: "Path required for 'write' operation" })
+					}
+					if (args.content === undefined) {
+						return stringify({ success: false, error: "Content required for 'write' operation" })
+					}
+					return stringify(await writeFile(state.path, args.path, args.content))
+				}
+
+				case "list": {
+					const state = clonedRepos.get(repoKey)
+					if (!state) {
+						return stringify({
+							success: false,
+							error: `Repository ${repoKey} not cloned. Run clone operation first.`,
+						})
+					}
+					return stringify(await listFiles(state.path, args.path))
 				}
 
 				default:
@@ -412,6 +459,70 @@ async function createPR(
 	const prNumber = prNumberMatch ? parseInt(prNumberMatch[1], 10) : undefined
 
 	return { success: true, prUrl, prNumber }
+}
+
+async function readFile(
+	repoPath: string,
+	filePath: string
+): Promise<{ success: boolean; content?: string; error?: string }> {
+	// Resolve the full path, preventing path traversal
+	const fullPath = `${repoPath}/${filePath}`.replace(/\/+/g, "/")
+	if (!fullPath.startsWith(repoPath)) {
+		return { success: false, error: "Invalid path: path traversal detected" }
+	}
+
+	const result = await run(`cat ${shellEscape(fullPath)}`)
+	if (!result.success) {
+		return { success: false, error: `Failed to read file: ${result.stderr}` }
+	}
+
+	return { success: true, content: result.stdout }
+}
+
+async function writeFile(
+	repoPath: string,
+	filePath: string,
+	content: string
+): Promise<{ success: boolean; error?: string }> {
+	// Resolve the full path, preventing path traversal
+	const fullPath = `${repoPath}/${filePath}`.replace(/\/+/g, "/")
+	if (!fullPath.startsWith(repoPath)) {
+		return { success: false, error: "Invalid path: path traversal detected" }
+	}
+
+	// Create parent directories if needed
+	const dirPath = fullPath.substring(0, fullPath.lastIndexOf("/"))
+	await run(`mkdir -p ${shellEscape(dirPath)}`)
+
+	// Write content using a heredoc to handle special characters safely
+	// Use base64 encoding to safely pass arbitrary content through the shell
+	const base64Content = Buffer.from(content).toString("base64")
+	const result = await run(`echo ${shellEscape(base64Content)} | base64 -d > ${shellEscape(fullPath)}`)
+
+	if (!result.success) {
+		return { success: false, error: `Failed to write file: ${result.stderr}` }
+	}
+
+	return { success: true }
+}
+
+async function listFiles(
+	repoPath: string,
+	subPath?: string
+): Promise<{ success: boolean; files?: string[]; error?: string }> {
+	const targetPath = subPath ? `${repoPath}/${subPath}`.replace(/\/+/g, "/") : repoPath
+	if (!targetPath.startsWith(repoPath)) {
+		return { success: false, error: "Invalid path: path traversal detected" }
+	}
+
+	// List files with relative paths, excluding .git directory
+	const result = await run(`find ${shellEscape(targetPath)} -type f ! -path '*/\\.git/*' | sed 's|^${repoPath}/||'`)
+	if (!result.success) {
+		return { success: false, error: `Failed to list files: ${result.stderr}` }
+	}
+
+	const files = result.stdout.trim().split("\n").filter(Boolean)
+	return { success: true, files }
 }
 
 async function execCommand(
