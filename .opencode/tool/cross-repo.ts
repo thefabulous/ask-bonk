@@ -72,79 +72,87 @@ Security: The token is scoped to only the target repository with minimal permiss
 	async execute(args) {
 		const repoKey = `${args.owner}/${args.repo}`
 
-		switch (args.operation) {
-			case "clone":
-				return await cloneRepo(args.owner, args.repo, args.branch)
+		// Helper to stringify result - OpenCode's tool validation requires output to be a string
+		const stringify = (result: object) => JSON.stringify(result)
 
-			case "branch": {
-				const state = clonedRepos.get(repoKey)
-				if (!state) {
-					return {
-						success: false,
-						error: `Repository ${repoKey} not cloned. Run clone operation first.`,
+		try {
+			switch (args.operation) {
+				case "clone":
+					return stringify(await cloneRepo(args.owner, args.repo, args.branch))
+
+				case "branch": {
+					const state = clonedRepos.get(repoKey)
+					if (!state) {
+						return stringify({
+							success: false,
+							error: `Repository ${repoKey} not cloned. Run clone operation first.`,
+						})
 					}
-				}
-				if (!args.branch) {
-					return { success: false, error: "Branch name required for 'branch' operation" }
-				}
-				return await createBranch(state.path, args.branch)
-			}
-
-			case "commit": {
-				const state = clonedRepos.get(repoKey)
-				if (!state) {
-					return {
-						success: false,
-						error: `Repository ${repoKey} not cloned. Run clone operation first.`,
+					if (!args.branch) {
+						return stringify({ success: false, error: "Branch name required for 'branch' operation" })
 					}
+					return stringify(await createBranch(state.path, args.branch))
 				}
-				if (!args.message) {
-					return { success: false, error: "Commit message required for 'commit' operation" }
-				}
-				return await commitChanges(state.path, args.message)
-			}
 
-			case "push": {
-				const state = clonedRepos.get(repoKey)
-				if (!state) {
-					return {
-						success: false,
-						error: `Repository ${repoKey} not cloned. Run clone operation first.`,
+				case "commit": {
+					const state = clonedRepos.get(repoKey)
+					if (!state) {
+						return stringify({
+							success: false,
+							error: `Repository ${repoKey} not cloned. Run clone operation first.`,
+						})
 					}
-				}
-				return await pushBranch(state.path, state.token)
-			}
-
-			case "pr": {
-				const state = clonedRepos.get(repoKey)
-				if (!state) {
-					return {
-						success: false,
-						error: `Repository ${repoKey} not cloned. Run clone operation first.`,
+					if (!args.message) {
+						return stringify({ success: false, error: "Commit message required for 'commit' operation" })
 					}
+					return stringify(await commitChanges(state.path, args.message))
 				}
-				if (!args.title) {
-					return { success: false, error: "PR title required for 'pr' operation" }
-				}
-				return await createPR(state.path, state.token, args.title, args.message, args.base || state.defaultBranch)
-			}
 
-			case "exec": {
-				const state = clonedRepos.get(repoKey)
-				if (!state) {
-					return {
-						success: false,
-						error: `Repository ${repoKey} not cloned. Run clone operation first.`,
+				case "push": {
+					const state = clonedRepos.get(repoKey)
+					if (!state) {
+						return stringify({
+							success: false,
+							error: `Repository ${repoKey} not cloned. Run clone operation first.`,
+						})
 					}
+					return stringify(await pushBranch(state.path, state.token))
 				}
-				if (!args.command) {
-					return { success: false, error: "Command required for 'exec' operation" }
-				}
-				return await execCommand(state.path, args.command)
-			}
 
-			default:
-				return { success: false, error: `Unknown operation: ${args.operation}` }
+				case "pr": {
+					const state = clonedRepos.get(repoKey)
+					if (!state) {
+						return stringify({
+							success: false,
+							error: `Repository ${repoKey} not cloned. Run clone operation first.`,
+						})
+					}
+					if (!args.title) {
+						return stringify({ success: false, error: "PR title required for 'pr' operation" })
+					}
+					return stringify(await createPR(state.path, state.token, args.title, args.message, args.base || state.defaultBranch))
+				}
+
+				case "exec": {
+					const state = clonedRepos.get(repoKey)
+					if (!state) {
+						return stringify({
+							success: false,
+							error: `Repository ${repoKey} not cloned. Run clone operation first.`,
+						})
+					}
+					if (!args.command) {
+						return stringify({ success: false, error: "Command required for 'exec' operation" })
+					}
+					return stringify(await execCommand(state.path, args.command))
+				}
+
+				default:
+					return stringify({ success: false, error: `Unknown operation: ${args.operation}` })
+			}
+		} catch (error) {
+			console.error(`cross-repo tool error [${args.operation}]:`, error)
+			throw error
 		}
 	},
 })
