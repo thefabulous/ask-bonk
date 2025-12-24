@@ -433,12 +433,29 @@ async function execCommand(
 	}
 }
 
-// Simple shell execution helper
-async function run(command: string): Promise<{ success: boolean; stdout: string; stderr: string }> {
+// Simple shell execution helper with timeout and non-interactive mode
+// Timeout defaults to 120 seconds to match typical GitHub Actions timeouts
+async function run(
+	command: string,
+	timeoutMs: number = 120_000
+): Promise<{ success: boolean; stdout: string; stderr: string }> {
 	try {
 		const proc = Bun.spawn(["bash", "-c", command], {
 			stdout: "pipe",
 			stderr: "pipe",
+			// CRITICAL: Set stdin to "ignore" to prevent git from waiting for credential prompts
+			// Without this, git clone can hang forever if it tries to prompt for username/password
+			stdin: "ignore",
+			// Disable git's terminal prompts - fail fast instead of waiting for input
+			// This is essential for non-interactive environments like CI/CD
+			env: {
+				...process.env,
+				GIT_TERMINAL_PROMPT: "0",
+				// Also disable SSH interactive prompts
+				GIT_SSH_COMMAND: "ssh -oBatchMode=yes",
+			},
+			// Add timeout to prevent hanging forever
+			timeout: timeoutMs,
 		})
 
 		const stdout = await new Response(proc.stdout).text()
