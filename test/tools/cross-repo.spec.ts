@@ -1,7 +1,15 @@
-// Plugin tests using Bun's test runner (run with: bun test test/tools/)
-// These tests verify error handling and context detection in the cross-repo tool
+// Plugin tests - verify error handling and context detection in the cross-repo tool
+// Run with: bun test test/tools/ (separate from vitest Workers pool tests)
 
-import { describe, it, expect, beforeEach, afterEach } from "bun:test"
+import { describe, it, expect, afterEach } from "bun:test"
+
+// Mock ToolContext for testing - the tool requires sessionID for path isolation
+const mockToolContext = {
+	sessionID: "test-session-123",
+	messageID: "test-message-456",
+	agent: "test-agent",
+	abort: new AbortController().signal,
+}
 
 describe("cross-repo tool", () => {
 	const originalEnv = { ...process.env }
@@ -15,12 +23,15 @@ describe("cross-repo tool", () => {
 		it("returns error JSON when repo not cloned (branch operation)", async () => {
 			const { default: crossRepoTool } = await import("../../.opencode/tool/cross-repo")
 
-			const result = await crossRepoTool.execute({
-				owner: "test",
-				repo: "not-cloned-repo",
-				operation: "branch",
-				branch: "test-branch",
-			})
+			const result = await crossRepoTool.execute(
+				{
+					owner: "test",
+					repo: "not-cloned-repo",
+					operation: "branch",
+					branch: "test-branch",
+				},
+				mockToolContext
+			)
 
 			const parsed = JSON.parse(result)
 			expect(parsed.success).toBe(false)
@@ -30,11 +41,14 @@ describe("cross-repo tool", () => {
 		it("returns error JSON for unknown operation", async () => {
 			const { default: crossRepoTool } = await import("../../.opencode/tool/cross-repo")
 
-			const result = await crossRepoTool.execute({
-				owner: "test",
-				repo: "test-repo",
-				operation: "invalid-op" as any,
-			})
+			const result = await crossRepoTool.execute(
+				{
+					owner: "test",
+					repo: "test-repo",
+					operation: "invalid-op" as any,
+				},
+				mockToolContext
+			)
 
 			const parsed = JSON.parse(result)
 			expect(parsed.success).toBe(false)
@@ -54,7 +68,7 @@ describe("cross-repo tool", () => {
 
 			for (const input of badInputs) {
 				// Should not throw
-				const result = await crossRepoTool.execute(input as any)
+				const result = await crossRepoTool.execute(input as any, mockToolContext)
 
 				// Should return valid JSON
 				expect(() => JSON.parse(result)).not.toThrow()
@@ -75,7 +89,7 @@ describe("cross-repo tool", () => {
 			]
 
 			for (const input of missingArgCases) {
-				const result = await crossRepoTool.execute(input as any)
+				const result = await crossRepoTool.execute(input as any, mockToolContext)
 				const parsed = JSON.parse(result)
 				expect(parsed.success).toBe(false)
 				// Either "not cloned" or missing arg - both are graceful errors
@@ -97,11 +111,14 @@ describe("cross-repo tool", () => {
 			const mod = await import("../../.opencode/tool/cross-repo")
 			const crossRepoTool = mod.default
 
-			const result = await crossRepoTool.execute({
-				owner: "test",
-				repo: "test-repo",
-				operation: "clone",
-			})
+			const result = await crossRepoTool.execute(
+				{
+					owner: "test",
+					repo: "test-repo",
+					operation: "clone",
+				},
+				mockToolContext
+			)
 
 			const parsed = JSON.parse(result)
 			expect(parsed.success).toBe(false)
@@ -119,11 +136,14 @@ describe("cross-repo tool", () => {
 			const crossRepoTool = mod.default
 
 			// This will fail on clone (invalid token), but should NOT fail on auth
-			const result = await crossRepoTool.execute({
-				owner: "test",
-				repo: "test-repo",
-				operation: "clone",
-			})
+			const result = await crossRepoTool.execute(
+				{
+					owner: "test",
+					repo: "test-repo",
+					operation: "clone",
+				},
+				mockToolContext
+			)
 
 			const parsed = JSON.parse(result)
 			// Will fail, but not due to "No authentication"
@@ -142,11 +162,14 @@ describe("cross-repo tool", () => {
 			const mod = await import("../../.opencode/tool/cross-repo")
 			const crossRepoTool = mod.default
 
-			const result = await crossRepoTool.execute({
-				owner: "test",
-				repo: "test-repo",
-				operation: "clone",
-			})
+			const result = await crossRepoTool.execute(
+				{
+					owner: "test",
+					repo: "test-repo",
+					operation: "clone",
+				},
+				mockToolContext
+			)
 
 			const parsed = JSON.parse(result)
 			expect(parsed.success).toBe(false)

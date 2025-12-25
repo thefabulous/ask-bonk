@@ -1,5 +1,6 @@
-import { tool } from "@opencode-ai/plugin"
+import { tool, type ToolContext } from "@opencode-ai/plugin"
 import { Shescape } from "shescape"
+import { tmpdir } from "os"
 
 // Shescape instance for safe shell argument escaping
 // Uses bash shell explicitly since we spawn with bash -c
@@ -11,7 +12,19 @@ function shellEscape(str: string): string {
 }
 
 // State tracking for cloned repos across tool invocations
+// Key format: "{sessionID}/{owner}/{repo}" to isolate repos per session
 const clonedRepos = new Map<string, { path: string; token: string; defaultBranch: string }>()
+
+// Get session-scoped clone path: {tmpdir}/{sessionId}/{owner}-{repo}
+// This ensures concurrent agents/sub-agents don't clobber each other
+function getClonePath(sessionID: string, owner: string, repo: string): string {
+	return `${tmpdir()}/${sessionID}/${owner}-${repo}`
+}
+
+// Get the repo key for the clonedRepos map - includes sessionID for isolation
+function getRepoKey(sessionID: string, owner: string, repo: string): string {
+	return `${sessionID}/${owner}/${repo}`
+}
 
 export default tool({
 	description: `Operate on GitHub repositories other than the current working repository.
@@ -29,7 +42,7 @@ The tool handles authentication automatically based on execution context:
 **Non-interactive** (CI, sandbox, scripts): Uses gh CLI if authenticated, falls back to GH_TOKEN/GITHUB_TOKEN env var.
 
 Supported operations:
-- clone: Shallow clone a repo to /tmp/<owner>-<repo>. Returns the local path.
+- clone: Shallow clone a repo to {tmpdir}/{sessionID}/{owner}-{repo}. Returns the local path. Session-scoped paths prevent concurrent agents from clobbering each other.
 - read: Read a file from the cloned repo (path relative to repo root).
 - write: Write content to a file in the cloned repo (path relative to repo root).
 - list: List files in the cloned repo (optionally under a subpath).
@@ -82,8 +95,8 @@ Security: In GitHub Actions, the token is scoped to only the target repository w
 		content: tool.schema.string().optional().describe("File content for 'write' operation"),
 	},
 
-	async execute(args) {
-		const repoKey = `${args.owner}/${args.repo}`
+	async execute(args, ctx: ToolContext) {
+		const repoKey = getRepoKey(ctx.sessionID, args.owner, args.repo)
 
 		// Helper to stringify result - OpenCode's tool validation requires output to be a string
 		const stringify = (result: object) => JSON.stringify(result)
@@ -91,7 +104,7 @@ Security: In GitHub Actions, the token is scoped to only the target repository w
 		try {
 			switch (args.operation) {
 				case "clone":
-					return stringify(await cloneRepo(args.owner, args.repo, args.branch))
+					return stringify(await cloneRepo(ctx.sessionID, args.owner, args.repo, args.branch))
 
 				case "branch": {
 					const state = clonedRepos.get(repoKey)
@@ -416,11 +429,12 @@ async function getTargetRepoToken(owner: string, repo: string): Promise<{ token:
 
 
 async function cloneRepo(
+	sessionID: string,
 	owner: string,
 	repo: string,
 	branch?: string
 ): Promise<{ success: boolean; path?: string; defaultBranch?: string; error?: string }> {
-	const repoKey = `${owner}/${repo}`
+	const repoKey = getRepoKey(sessionID, owner, repo)
 
 	// Check if already cloned
 	if (clonedRepos.has(repoKey)) {
@@ -438,7 +452,11 @@ async function cloneRepo(
 		return { success: false, error: tokenResult.error }
 	}
 
-	const clonePath = `/tmp/${owner}-${repo}`
+	// Session-scoped path prevents concurrent agents from clobbering each other
+	const clonePath = getClonePath(sessionID, owner, repo)
+
+	// Ensure parent directory exists
+	await run(`mkdir -p ${shellEscape(`${tmpdir()}/${sessionID}`)}`)
 	const cloneUrl = `https://x-access-token:${tokenResult.token}@github.com/${owner}/${repo}.git`
 
 	// Remove existing directory if present
