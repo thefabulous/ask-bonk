@@ -34,6 +34,18 @@ jobs:
       issues: read
       pull-requests: read
     steps:
+      - name: Check user permission
+        id: check-permission
+        uses: actions-cool/check-user-permission@v2
+        with:
+          require: write
+
+      - name: Bail if insufficient permissions
+        if: steps.check-permission.outputs.require-result == 'false'
+        run: |
+          echo "User ${{ github.actor }} does not have write permission to this repository"
+          exit 1
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
