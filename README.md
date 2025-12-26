@@ -33,9 +33,7 @@ on:
 
 jobs:
   bonk:
-    if: |
-      github.event.sender.type != 'Bot' &&
-      (contains(github.event.comment.body, '@ask-bonk') || contains(github.event.comment.body, '/bonk'))
+    if: github.event.sender.type != 'Bot'
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -45,13 +43,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Configure Git
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Run Bonk
         uses: elithrar/ask-bonk/github@main
@@ -164,12 +155,15 @@ jobs:
       issues: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: elithrar/ask-bonk/github@main
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Bonk
+        uses: elithrar/ask-bonk/github@main
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         with:
-          model: opencode/claude-opus-4-5
+          model: "opencode/claude-opus-4-5"
           prompt: |
             Update all dependencies to their latest compatible versions.
             Run tests and type-check after updating.
