@@ -117,6 +117,7 @@ For more complex tasks, use a multi-line prompt:
 - `/bonk explain how the auth system works` - Ask questions about the codebase
 - `@ask-bonk fix the failing tests` - Let Bonk make changes and push commits
 - `/bonk add documentation for the API endpoints` - Generate documentation
+- `/bonk add the --format="json" flag to the export subcommand and update the product/docs repo CLI docs to show the usage` - Make changes across one (or more!) repos in your org using the `cross-repo` tool
 
 ### Supported Events
 
