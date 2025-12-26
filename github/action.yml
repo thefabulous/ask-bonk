@@ -197,6 +197,13 @@ runs:
       shell: bash
       run: echo "$HOME/.opencode/bin" >> $GITHUB_PATH
 
+    - name: Configure Git
+      if: steps.mentions.outputs.skip != 'true'
+      shell: bash
+      run: |
+        git config --global user.name "ask-bonk[bot]"
+        git config --global user.email "ask-bonk[bot]@users.noreply.github.com"
+
     - name: Run opencode
       if: steps.mentions.outputs.skip != 'true'
       id: opencode

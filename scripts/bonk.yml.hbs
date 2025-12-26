@@ -8,9 +8,7 @@ on:
 
 jobs:
   bonk:
-    if: |
-      github.event.sender.type != 'Bot' &&
-      (contains(github.event.comment.body, '{{BOT_MENTION}}') || contains(github.event.comment.body, '{{BOT_COMMAND}}'))
+    if: github.event.sender.type != 'Bot'
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -23,11 +21,6 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Configure Git
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-
       - name: Run Bonk
         uses: elithrar/ask-bonk/github@main
         env:
@@ -35,3 +28,4 @@ jobs:
         with:
           model: "{{MODEL}}"
           mentions: "{{BOT_COMMAND}},{{BOT_MENTION}}"
+          permissions: write

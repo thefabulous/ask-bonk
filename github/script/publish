@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Get the tag that triggered this workflow
+current_tag="${GITHUB_REF#refs/tags/}"
+
+if [[ ! "$current_tag" =~ ^github-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "Not a valid github-v*.*.* tag: $current_tag"
+    exit 1
+fi
+
+echo "Published tag: $current_tag"
