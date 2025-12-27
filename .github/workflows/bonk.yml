@@ -28,7 +28,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Run Bonk
-        uses: elithrar/ask-bonk/github@main
+        uses: ask-bonk/ask-bonk/github@main
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         with:
