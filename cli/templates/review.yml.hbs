@@ -79,10 +79,29 @@ jobs:
 
             1. Focus on actual violations and bugs. Where possible, comment on the exact line number to help guide the reviewer.
             2. Break up "needs fixing" (real logic bugs, poor error handling, security issues) vs. "suggestions" (nested logic, unused code, code structure/maintenance guidance) when responding so that a human has clear, actionable feedback.
-            3. Use the gh cli to create comments on the files (or line numbers) where relevant. Use suggestions to suggest fixes, especially where you have high-confidence in the fix. Ensure fixes are valid code and take into account the surrounding code (opening/closing braces, indentation, comments). ALWAYS leave the final "review" comment empty.
-            4. Your summary will be posted as a comment for you by OpenCode.
+            3. **IMPORTANT**: Use the gh cli to create inline comments on specific code locations. Execute bash commands using the Bash tool to create these comments. Examples:
 
-            In general, aim to provide actionable comments > code suggestions.
+               For inline comments on specific lines in the diff:
+               ```bash
+               gh pr review ${{ steps.pr-number.outputs.number }} --comment \
+                 --body "**Bug**: This could cause a null pointer exception. Consider adding a null check before accessing \`user.name\`." \
+                 --path "src/handlers.ts" \
+                 --line 42
+               ```
+
+               For suggesting code changes (use this for high-confidence fixes):
+               ```bash
+               gh pr review ${{ steps.pr-number.outputs.number }} --comment \
+                 --body "**Suggestion**: Fix potential null reference" \
+                 --path "src/handlers.ts" \
+                 --line 42 \
+                 --suggestion
+               ```
+
+               You MUST create individual inline comments for each issue found. Do not just list issues in your final summary.
+            4. Your summary will be posted as a comment for you by OpenCode. Keep it brief and reference the inline comments you created.
+
+            In general, aim to provide actionable inline comments on specific code locations rather than generic summaries.
 
             <pr_number>
             ${{ steps.pr-number.outputs.number }}
