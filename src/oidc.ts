@@ -218,8 +218,13 @@ export async function handleExchangeToken(
 		return { error: `GitHub App not installed for ${owner}/${repo}` };
 	}
 
-	// Generate installation token
-	const token = await generateInstallationToken(env, installationId);
+	// Scope the token to the source repo only. Even though the OIDC token proves the
+	// workflow runs in this repo, we limit the token to prevent lateral movement if the
+	// app is installed org-wide. A compromised workflow in repo-a shouldn't get a token
+	// that can access repo-b.
+	const token = await generateInstallationToken(env, installationId, {
+		repositoryNames: [repo],
+	});
 
 	return { token };
 }
@@ -335,8 +340,18 @@ export async function handleExchangeTokenWithPAT(
 		return { error: `GitHub App not installed for ${body.owner}/${body.repo}` };
 	}
 
-	// Generate installation token
-	const token = await generateInstallationToken(env, installationId);
+	// Scope the token to the requested repo only. The PAT proves the user has write access,
+	// but we still limit the installation token to prevent privilege escalation if the app
+	// is installed org-wide. A PAT with access to repo-a shouldn't yield a token for repo-b.
+	const token = await generateInstallationToken(env, installationId, {
+		repositoryNames: [body.repo],
+		permissions: {
+			contents: 'write',
+			pull_requests: 'write',
+			issues: 'write',
+			metadata: 'read',
+		},
+	});
 
 	return { token };
 }
