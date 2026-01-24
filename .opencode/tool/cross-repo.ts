@@ -1,6 +1,7 @@
 import { tool, type ToolContext } from "@opencode-ai/plugin"
 import { Shescape } from "shescape"
 import { tmpdir } from "os"
+import { resolve } from "path"
 
 // Shescape instance for safe shell argument escaping
 // Uses bash shell explicitly since we spawn with bash -c
@@ -9,6 +10,32 @@ const shescape = new Shescape({ shell: "bash" })
 // Wrapper for shescape.quote() - escapes a string for safe use as a shell argument
 function shellEscape(str: string): string {
 	return shescape.quote(str)
+}
+
+// Validates GitHub owner/repo identifiers to prevent path traversal via malicious names.
+// GitHub allows: alphanumeric, hyphens, underscores, and dots (with restrictions).
+// We're slightly more permissive but block path separators and traversal sequences.
+function isValidRepoIdentifier(value: string): boolean {
+	if (!value || value.length > 100) return false
+	// Block path traversal sequences and path separators
+	if (value.includes("..") || value.includes("/") || value.includes("\\")) return false
+	// Allow typical GitHub identifier characters
+	return /^[a-zA-Z0-9._-]+$/.test(value)
+}
+
+// Safely resolves a path within a base directory, preventing traversal attacks.
+// Returns null if the resolved path would escape the base directory.
+function safeResolvePath(basePath: string, relativePath: string): string | null {
+	// Normalize the base path
+	const normalizedBase = resolve(basePath)
+	// Resolve the full path (this handles .., symlinks in the path string, etc.)
+	const fullPath = resolve(normalizedBase, relativePath)
+	// Ensure the resolved path is within the base directory
+	// Use separator suffix to prevent prefix attacks: /tmp/repo vs /tmp/repo-evil
+	if (!fullPath.startsWith(normalizedBase + "/") && fullPath !== normalizedBase) {
+		return null
+	}
+	return fullPath
 }
 
 // State tracking for cloned repos across tool invocations
@@ -434,6 +461,14 @@ async function cloneRepo(
 	repo: string,
 	branch?: string
 ): Promise<{ success: boolean; path?: string; defaultBranch?: string; error?: string }> {
+	// Validate owner and repo to prevent path traversal via malicious identifiers
+	if (!isValidRepoIdentifier(owner)) {
+		return { success: false, error: `Invalid owner name: ${owner}` }
+	}
+	if (!isValidRepoIdentifier(repo)) {
+		return { success: false, error: `Invalid repo name: ${repo}` }
+	}
+
 	const repoKey = getRepoKey(sessionID, owner, repo)
 
 	// Check if already cloned
@@ -595,9 +630,9 @@ async function readFile(
 	repoPath: string,
 	filePath: string
 ): Promise<{ success: boolean; content?: string; error?: string }> {
-	// Resolve the full path, preventing path traversal
-	const fullPath = `${repoPath}/${filePath}`.replace(/\/+/g, "/")
-	if (!fullPath.startsWith(repoPath)) {
+	// Safely resolve the path, preventing traversal attacks
+	const fullPath = safeResolvePath(repoPath, filePath)
+	if (!fullPath) {
 		return { success: false, error: "Invalid path: path traversal detected" }
 	}
 
@@ -614,9 +649,9 @@ async function writeFile(
 	filePath: string,
 	content: string
 ): Promise<{ success: boolean; error?: string }> {
-	// Resolve the full path, preventing path traversal
-	const fullPath = `${repoPath}/${filePath}`.replace(/\/+/g, "/")
-	if (!fullPath.startsWith(repoPath)) {
+	// Safely resolve the path, preventing traversal attacks
+	const fullPath = safeResolvePath(repoPath, filePath)
+	if (!fullPath) {
 		return { success: false, error: "Invalid path: path traversal detected" }
 	}
 
@@ -640,13 +675,16 @@ async function listFiles(
 	repoPath: string,
 	subPath?: string
 ): Promise<{ success: boolean; files?: string[]; error?: string }> {
-	const targetPath = subPath ? `${repoPath}/${subPath}`.replace(/\/+/g, "/") : repoPath
-	if (!targetPath.startsWith(repoPath)) {
+	// Safely resolve the path if subPath provided, preventing traversal attacks
+	const targetPath = subPath ? safeResolvePath(repoPath, subPath) : resolve(repoPath)
+	if (!targetPath) {
 		return { success: false, error: "Invalid path: path traversal detected" }
 	}
 
 	// List files with relative paths, excluding .git directory
-	const result = await run(`find ${shellEscape(targetPath)} -type f ! -path '*/\\.git/*' | sed 's|^${repoPath}/||'`)
+	// Use shellEscape for the sed pattern to prevent injection
+	const normalizedRepoPath = resolve(repoPath)
+	const result = await run(`find ${shellEscape(targetPath)} -type f ! -path '*/\\.git/*' | sed 's|^${shellEscape(normalizedRepoPath)}/||'`)
 	if (!result.success) {
 		return { success: false, error: `Failed to list files: ${result.stderr}` }
 	}
