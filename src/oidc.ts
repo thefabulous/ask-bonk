@@ -218,12 +218,18 @@ export async function handleExchangeToken(
 		return { error: `GitHub App not installed for ${owner}/${repo}` };
 	}
 
-	// Scope the token to the source repo only. Even though the OIDC token proves the
-	// workflow runs in this repo, we limit the token to prevent lateral movement if the
-	// app is installed org-wide. A compromised workflow in repo-a shouldn't get a token
-	// that can access repo-b.
+	// Scope the token to the source repo with minimal permissions. Even though the OIDC
+	// token proves the workflow runs in this repo, we limit scope to prevent lateral
+	// movement if the app is installed org-wide, and restrict permissions to only what's
+	// needed for typical operations (push, PRs, comments).
 	const token = await generateInstallationToken(env, installationId, {
 		repositoryNames: [repo],
+		permissions: {
+			contents: 'write',
+			pull_requests: 'write',
+			issues: 'write',
+			metadata: 'read',
+		},
 	});
 
 	return { token };

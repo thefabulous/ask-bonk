@@ -2,6 +2,7 @@ import { tool, type ToolContext } from "@opencode-ai/plugin"
 import { Shescape } from "shescape"
 import { tmpdir } from "os"
 import { resolve } from "path"
+import { realpathSync } from "fs"
 
 // Shescape instance for safe shell argument escaping
 // Uses bash shell explicitly since we spawn with bash -c
@@ -25,16 +26,28 @@ function isValidRepoIdentifier(value: string): boolean {
 
 // Safely resolves a path within a base directory, preventing traversal attacks.
 // Returns null if the resolved path would escape the base directory.
+// Also rejects paths containing symlinks that escape the base directory.
 function safeResolvePath(basePath: string, relativePath: string): string | null {
-	// Normalize the base path
 	const normalizedBase = resolve(basePath)
-	// Resolve the full path (this handles .., symlinks in the path string, etc.)
 	const fullPath = resolve(normalizedBase, relativePath)
-	// Ensure the resolved path is within the base directory
-	// Use separator suffix to prevent prefix attacks: /tmp/repo vs /tmp/repo-evil
+
+	// Check the string path first (handles .. sequences)
 	if (!fullPath.startsWith(normalizedBase + "/") && fullPath !== normalizedBase) {
 		return null
 	}
+
+	// For existing paths, resolve ALL symlinks in the path and re-check containment.
+	// This catches symlinks anywhere in the path (e.g., repo/evil/ -> /etc).
+	try {
+		const realPath = realpathSync(fullPath)
+		const realBase = realpathSync(normalizedBase)
+		if (!realPath.startsWith(realBase + "/") && realPath !== realBase) {
+			return null
+		}
+	} catch {
+		// Path doesn't exist yet (write operation) — string check is sufficient
+	}
+
 	return fullPath
 }
 
@@ -681,15 +694,20 @@ async function listFiles(
 		return { success: false, error: "Invalid path: path traversal detected" }
 	}
 
-	// List files with relative paths, excluding .git directory
-	// Use shellEscape for the sed pattern to prevent injection
-	const normalizedRepoPath = resolve(repoPath)
-	const result = await run(`find ${shellEscape(targetPath)} -type f ! -path '*/\\.git/*' | sed 's|^${shellEscape(normalizedRepoPath)}/||'`)
+	// List files excluding .git directory
+	const result = await run(`find ${shellEscape(targetPath)} -type f ! -path '*/\\.git/*'`)
 	if (!result.success) {
 		return { success: false, error: `Failed to list files: ${result.stderr}` }
 	}
 
-	const files = result.stdout.trim().split("\n").filter(Boolean)
+	// Strip the repo path prefix in JS to avoid sed pattern injection issues
+	const prefix = resolve(repoPath) + "/"
+	const files = result.stdout
+		.trim()
+		.split("\n")
+		.filter(Boolean)
+		.map((f) => (f.startsWith(prefix) ? f.slice(prefix.length) : f))
+
 	return { success: true, files }
 }
 
