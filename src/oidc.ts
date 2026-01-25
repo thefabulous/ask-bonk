@@ -1,11 +1,41 @@
 import { createAppAuth } from '@octokit/auth-app';
 import { Octokit } from '@octokit/rest';
+import { RequestError } from '@octokit/request-error';
 import { jwtVerify, createRemoteJWKSet } from 'jose';
 import type { Env } from './types';
 import { hasWriteAccess } from './github';
 
 // GitHub's OIDC token issuer for Actions
 const GITHUB_ACTIONS_ISSUER = 'https://token.actions.githubusercontent.com';
+
+// Retry helper for transient failures (network, rate limits).
+// 3 attempts total, exponential backoff starting at 5s (5s, 10s).
+async function withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
+	const maxAttempts = 3;
+	const baseDelayMs = 5000;
+
+	for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+		try {
+			return await fn();
+		} catch (err) {
+			// Don't retry client errors (4xx) - they won't succeed on retry
+			if (err instanceof RequestError && err.status >= 400 && err.status < 500) {
+				throw err;
+			}
+
+			if (attempt === maxAttempts) {
+				throw err;
+			}
+
+			const delayMs = baseDelayMs * Math.pow(2, attempt - 1);
+			console.warn(`[${label}] Attempt ${attempt}/${maxAttempts} failed, retrying in ${delayMs}ms:`, err);
+			await new Promise((resolve) => setTimeout(resolve, delayMs));
+		}
+	}
+
+	// TypeScript: unreachable, but needed for type inference
+	throw new Error('Retry exhausted');
+}
 
 // TTL for cached installation IDs (30 minutes)
 export const APP_INSTALLATION_CACHE_TTL_SECS = 1800;
@@ -64,20 +94,29 @@ export async function validateGitHubOIDCToken(
 	}
 }
 
-// Extracts owner/repo from OIDC claims
+// Extracts owner/repo from OIDC claims.
+// Throws if the repository claim is malformed.
 export function extractRepoFromClaims(claims: GitHubActionsJWTClaims): { owner: string; repo: string } {
-	const [owner, repo] = claims.repository.split('/');
-	return { owner, repo };
+	const parts = claims.repository.split('/');
+	if (parts.length !== 2 || !parts[0] || !parts[1]) {
+		throw new Error(`Invalid repository claim: ${claims.repository}`);
+	}
+	return { owner: parts[0], repo: parts[1] };
 }
 
-// Gets or looks up the installation ID for a repository
+// Gets or looks up the installation ID for a repository.
+// Returns null if the app is not installed. Throws on transient errors (network, rate limit).
 export async function getInstallationId(env: Env, owner: string, repo: string): Promise<number | null> {
 	const repoKey = `${owner}/${repo}`;
 
-	// Check cache first
+	// Check cache first, with validation
 	const cached = await env.APP_INSTALLATIONS.get(repoKey);
 	if (cached) {
-		return parseInt(cached, 10);
+		const id = parseInt(cached, 10);
+		if (!Number.isNaN(id)) {
+			return id;
+		}
+		console.warn(`[${repoKey}] Invalid cached installation ID "${cached}", refetching`);
 	}
 
 	// Look up via GitHub API using the app's JWT
@@ -90,14 +129,22 @@ export async function getInstallationId(env: Env, owner: string, repo: string): 
 	const octokit = new Octokit({ auth: token });
 
 	try {
-		const response = await octokit.apps.getRepoInstallation({ owner, repo });
+		const response = await withRetry(
+			() => octokit.apps.getRepoInstallation({ owner, repo }),
+			`getInstallationId(${repoKey})`
+		);
 		const installationId = response.data.id;
 
 		// Cache for future use
 		await env.APP_INSTALLATIONS.put(repoKey, String(installationId), { expirationTtl: APP_INSTALLATION_CACHE_TTL_SECS });
 		return installationId;
-	} catch {
-		return null;
+	} catch (err) {
+		// 404 = app not installed on this repo (expected case)
+		if (err instanceof RequestError && err.status === 404) {
+			return null;
+		}
+		// Other errors (network, rate limit, 5xx) should propagate
+		throw err;
 	}
 }
 
@@ -212,27 +259,32 @@ export async function handleExchangeToken(
 	// Extract repository info from claims
 	const { owner, repo } = extractRepoFromClaims(validation.claims);
 
-	// Get installation ID
-	const installationId = await getInstallationId(env, owner, repo);
-	if (!installationId) {
-		return { error: `GitHub App not installed for ${owner}/${repo}` };
+	try {
+		// Get installation ID (throws on transient errors like network/rate limit)
+		const installationId = await getInstallationId(env, owner, repo);
+		if (!installationId) {
+			return { error: `GitHub App not installed for ${owner}/${repo}` };
+		}
+
+		// Scope the token to the source repo with minimal permissions. Even though the OIDC
+		// token proves the workflow runs in this repo, we limit scope to prevent lateral
+		// movement if the app is installed org-wide, and restrict permissions to only what's
+		// needed for typical operations (push, PRs, comments).
+		const token = await generateInstallationToken(env, installationId, {
+			repositoryNames: [repo],
+			permissions: {
+				contents: 'write',
+				pull_requests: 'write',
+				issues: 'write',
+				metadata: 'read',
+			},
+		});
+
+		return { token };
+	} catch (err) {
+		const message = err instanceof Error ? err.message : 'Unknown error';
+		return { error: `Failed to generate token for ${owner}/${repo}: ${message}` };
 	}
-
-	// Scope the token to the source repo with minimal permissions. Even though the OIDC
-	// token proves the workflow runs in this repo, we limit scope to prevent lateral
-	// movement if the app is installed org-wide, and restrict permissions to only what's
-	// needed for typical operations (push, PRs, comments).
-	const token = await generateInstallationToken(env, installationId, {
-		repositoryNames: [repo],
-		permissions: {
-			contents: 'write',
-			pull_requests: 'write',
-			issues: 'write',
-			metadata: 'read',
-		},
-	});
-
-	return { token };
 }
 
 // Handler for POST /exchange_github_app_token_for_repo
@@ -273,37 +325,42 @@ export async function handleExchangeTokenForRepo(
 		};
 	}
 
-	// Get installation ID for the TARGET repository
-	const installationId = await getInstallationId(env, body.owner, body.repo);
-	if (!installationId) {
-		return { error: `GitHub App not installed for ${body.owner}/${body.repo}` };
+	try {
+		// Get installation ID for the TARGET repository (throws on transient errors)
+		const installationId = await getInstallationId(env, body.owner, body.repo);
+		if (!installationId) {
+			return { error: `GitHub App not installed for ${body.owner}/${body.repo}` };
+		}
+
+		// Security check 2: Actor write access
+		// The actor who triggered the workflow must have write access to the target repo
+		const actor = validation.claims.actor;
+		const hasAccess = await checkActorWriteAccess(env, installationId, body.owner, body.repo, actor);
+		if (!hasAccess) {
+			return {
+				error: `Access denied: ${actor} does not have write access to ${body.owner}/${body.repo}`,
+			};
+		}
+
+		// Generate scoped installation token for the target repo only.
+		// Token is restricted to:
+		// 1. Only the target repository (not all repos the app is installed on)
+		// 2. Minimum permissions needed for cross-repo operations (contents, pull_requests, issues)
+		const token = await generateInstallationToken(env, installationId, {
+			repositoryNames: [body.repo],
+			permissions: {
+				contents: 'write', // Push commits
+				pull_requests: 'write', // Create PRs
+				issues: 'write', // Create comments
+				metadata: 'read', // Always implicitly included, but be explicit
+			},
+		});
+
+		return { token };
+	} catch (err) {
+		const message = err instanceof Error ? err.message : 'Unknown error';
+		return { error: `Failed to generate token for ${body.owner}/${body.repo}: ${message}` };
 	}
-
-	// Security check 2: Actor write access
-	// The actor who triggered the workflow must have write access to the target repo
-	const actor = validation.claims.actor;
-	const hasAccess = await checkActorWriteAccess(env, installationId, body.owner, body.repo, actor);
-	if (!hasAccess) {
-		return {
-			error: `Access denied: ${actor} does not have write access to ${body.owner}/${body.repo}`,
-		};
-	}
-
-	// Generate scoped installation token for the target repo only.
-	// Token is restricted to:
-	// 1. Only the target repository (not all repos the app is installed on)
-	// 2. Minimum permissions needed for cross-repo operations (contents, pull_requests, issues)
-	const token = await generateInstallationToken(env, installationId, {
-		repositoryNames: [body.repo],
-		permissions: {
-			contents: 'write', // Push commits
-			pull_requests: 'write', // Create PRs
-			issues: 'write', // Create comments
-			metadata: 'read', // Always implicitly included, but be explicit
-		},
-	});
-
-	return { token };
 }
 
 // Handler for POST /exchange_github_app_token_with_pat
@@ -340,24 +397,29 @@ export async function handleExchangeTokenWithPAT(
 		return { error: `PAT does not have access to ${body.owner}/${body.repo}` };
 	}
 
-	// Get installation ID
-	const installationId = await getInstallationId(env, body.owner, body.repo);
-	if (!installationId) {
-		return { error: `GitHub App not installed for ${body.owner}/${body.repo}` };
+	try {
+		// Get installation ID (throws on transient errors)
+		const installationId = await getInstallationId(env, body.owner, body.repo);
+		if (!installationId) {
+			return { error: `GitHub App not installed for ${body.owner}/${body.repo}` };
+		}
+
+		// Scope the token to the requested repo only. The PAT proves the user has write access,
+		// but we still limit the installation token to prevent privilege escalation if the app
+		// is installed org-wide. A PAT with access to repo-a shouldn't yield a token for repo-b.
+		const token = await generateInstallationToken(env, installationId, {
+			repositoryNames: [body.repo],
+			permissions: {
+				contents: 'write',
+				pull_requests: 'write',
+				issues: 'write',
+				metadata: 'read',
+			},
+		});
+
+		return { token };
+	} catch (err) {
+		const message = err instanceof Error ? err.message : 'Unknown error';
+		return { error: `Failed to generate token for ${body.owner}/${body.repo}: ${message}` };
 	}
-
-	// Scope the token to the requested repo only. The PAT proves the user has write access,
-	// but we still limit the installation token to prevent privilege escalation if the app
-	// is installed org-wide. A PAT with access to repo-a shouldn't yield a token for repo-b.
-	const token = await generateInstallationToken(env, installationId, {
-		repositoryNames: [body.repo],
-		permissions: {
-			contents: 'write',
-			pull_requests: 'write',
-			issues: 'write',
-			metadata: 'read',
-		},
-	});
-
-	return { token };
 }

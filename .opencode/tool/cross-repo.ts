@@ -26,7 +26,12 @@ function isValidRepoIdentifier(value: string): boolean {
 
 // Safely resolves a path within a base directory, preventing traversal attacks.
 // Returns null if the resolved path would escape the base directory.
-// Also rejects paths containing symlinks that escape the base directory.
+//
+// Security notes:
+// - For existing paths: returns realPath to prevent TOCTOU races
+// - For non-existent paths: returns fullPath after validating all existing parents
+//   (inherent TOCTOU window exists for new file writes — mitigated by parent validation)
+// - Fails closed on unexpected errors (only ENOENT is treated as "path doesn't exist")
 function safeResolvePath(basePath: string, relativePath: string): string | null {
 	const normalizedBase = resolve(basePath)
 	const fullPath = resolve(normalizedBase, relativePath)
@@ -36,19 +41,47 @@ function safeResolvePath(basePath: string, relativePath: string): string | null 
 		return null
 	}
 
-	// For existing paths, resolve ALL symlinks in the path and re-check containment.
-	// This catches symlinks anywhere in the path (e.g., repo/evil/ -> /etc).
+	// Resolve base directory once — it must exist and be accessible
+	let realBase: string
+	try {
+		realBase = realpathSync(normalizedBase)
+	} catch {
+		return null // Base directory inaccessible
+	}
+
+	// For existing paths, resolve symlinks and return the real path
 	try {
 		const realPath = realpathSync(fullPath)
-		const realBase = realpathSync(normalizedBase)
 		if (!realPath.startsWith(realBase + "/") && realPath !== realBase) {
 			return null
 		}
-	} catch {
-		// Path doesn't exist yet (write operation) — string check is sufficient
-	}
+		return realPath
+	} catch (err: unknown) {
+		// Only treat ENOENT as "path doesn't exist" - fail closed on other errors
+		const code = (err as NodeJS.ErrnoException).code
+		if (code !== "ENOENT") {
+			return null
+		}
 
-	return fullPath
+		// Path doesn't exist — check parent directories for escaping symlinks
+		let checkPath = resolve(fullPath, "..")
+		while (checkPath !== normalizedBase && checkPath.startsWith(normalizedBase)) {
+			try {
+				const realParent = realpathSync(checkPath)
+				if (!realParent.startsWith(realBase + "/") && realParent !== realBase) {
+					return null
+				}
+				break // Found a safe existing parent
+			} catch (parentErr: unknown) {
+				const parentCode = (parentErr as NodeJS.ErrnoException).code
+				if (parentCode !== "ENOENT") {
+					return null
+				}
+				checkPath = resolve(checkPath, "..")
+			}
+		}
+		return fullPath // Parents are safe, allow write to new path
+	}
 }
 
 // State tracking for cloned repos across tool invocations
