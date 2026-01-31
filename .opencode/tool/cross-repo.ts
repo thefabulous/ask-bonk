@@ -752,7 +752,16 @@ async function execCommand(
 	// to allow arbitrary shell commands. Security is handled at the API layer by:
 	// 1. Same-org restriction on token exchange
 	// 2. Actor write access verification
+	// 3. Visibility restriction (public repos can't access private repos)
 	// The LLM/user providing the command is already authorized to write to this repo.
+
+	// Audit log: exec is a powerful operation - log for visibility (truncate command for safety)
+	console.log(JSON.stringify({
+		event: "cross_repo_exec",
+		repo_path: repoPath,
+		command_preview: command.slice(0, 100) + (command.length > 100 ? "..." : ""),
+	}))
+
 	const result = await run(`cd ${shellEscape(repoPath)} && ${command}`)
 
 	return {

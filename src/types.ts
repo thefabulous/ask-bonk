@@ -26,6 +26,9 @@ export interface Env {
 	// Analytics Engine query API credentials (for /stats endpoint)
 	CLOUDFLARE_ACCOUNT_ID?: string;
 	ANALYTICS_TOKEN?: string;
+	// Enable PAT-to-installation-token exchange (for local development/testing)
+	// Set to "true" to enable - disabled by default in production
+	ENABLE_PAT_EXCHANGE?: string;
 }
 
 // Request body for /ask endpoint

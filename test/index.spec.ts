@@ -24,18 +24,27 @@ import type {
 import issueCommentFixture from "./fixtures/issue-comment.json";
 import prReviewCommentFixture from "./fixtures/pr-review-comment.json";
 
-// Mock env for model tests
-const mockEnv: Env = {
-	Sandbox: {} as Env["Sandbox"],
-	REPO_AGENT: {} as Env["REPO_AGENT"],
-	APP_INSTALLATIONS: {} as Env["APP_INSTALLATIONS"],
-	RATE_LIMITER: {} as Env["RATE_LIMITER"],
-	GITHUB_APP_ID: "123",
-	GITHUB_APP_PRIVATE_KEY: "test-key",
-	GITHUB_WEBHOOK_SECRET: "test-secret",
-	OPENCODE_API_KEY: "test-api-key",
-	DEFAULT_MODEL: "anthropic/claude-opus-4-5",
-};
+// Helper to create mock Env with optional overrides - avoids duplicating the full object
+function createMockEnv(overrides: Partial<Env> = {}): Env {
+	return {
+		Sandbox: {} as Env["Sandbox"],
+		REPO_AGENT: {} as Env["REPO_AGENT"],
+		APP_INSTALLATIONS: {
+			get: async () => null,
+			put: async () => {},
+		} as unknown as Env["APP_INSTALLATIONS"],
+		RATE_LIMITER: {} as Env["RATE_LIMITER"],
+		BONK_EVENTS: {} as Env["BONK_EVENTS"],
+		GITHUB_APP_ID: "123",
+		GITHUB_APP_PRIVATE_KEY: "test-key",
+		GITHUB_WEBHOOK_SECRET: "test-secret",
+		OPENCODE_API_KEY: "test-api-key",
+		DEFAULT_MODEL: "anthropic/claude-opus-4-5",
+		...overrides,
+	};
+}
+
+const mockEnv = createMockEnv();
 
 describe("Prompt Extraction", () => {
 	it("extracts full prompt", () => {
@@ -391,25 +400,11 @@ describe("OIDC Claim Parsing", () => {
 // These test the handler's validation logic by calling it with mock inputs.
 // The handler rejects requests early if validation fails, before any external API calls.
 describe("Cross-Repo Token Exchange Input Validation", () => {
-	// Mock env that will fail on any external call - tests should never reach these
-	const mockEnv: Env = {
-		Sandbox: {} as Env["Sandbox"],
-		REPO_AGENT: {} as Env["REPO_AGENT"],
-		APP_INSTALLATIONS: {
-			get: async () => null,
-			put: async () => {},
-		} as unknown as Env["APP_INSTALLATIONS"],
-		RATE_LIMITER: {} as Env["RATE_LIMITER"],
-		GITHUB_APP_ID: "123",
-		GITHUB_APP_PRIVATE_KEY: "test-key",
-		GITHUB_WEBHOOK_SECRET: "test-secret",
-		OPENCODE_API_KEY: "test-api-key",
-		DEFAULT_MODEL: "anthropic/claude-opus-4-5",
-	};
+	const testEnv = createMockEnv();
 
 	it("rejects requests without Authorization header", async () => {
 		const { handleExchangeTokenForRepo } = await import("../src/oidc");
-		const result = await handleExchangeTokenForRepo(mockEnv, null, {
+		const result = await handleExchangeTokenForRepo(testEnv, null, {
 			owner: "test-org",
 			repo: "test-repo",
 		});
@@ -420,7 +415,7 @@ describe("Cross-Repo Token Exchange Input Validation", () => {
 
 	it("rejects requests with non-Bearer Authorization", async () => {
 		const { handleExchangeTokenForRepo } = await import("../src/oidc");
-		const result = await handleExchangeTokenForRepo(mockEnv, "Basic abc123", {
+		const result = await handleExchangeTokenForRepo(testEnv, "Basic abc123", {
 			owner: "test-org",
 			repo: "test-repo",
 		});
@@ -433,7 +428,7 @@ describe("Cross-Repo Token Exchange Input Validation", () => {
 		const { handleExchangeTokenForRepo } = await import("../src/oidc");
 		// Using a fake token - it will fail OIDC validation, but that's fine
 		// We're testing that the handler validates body params too
-		const result = await handleExchangeTokenForRepo(mockEnv, "Bearer fake.jwt.token", {
+		const result = await handleExchangeTokenForRepo(testEnv, "Bearer fake.jwt.token", {
 			repo: "test-repo",
 		});
 
@@ -443,11 +438,64 @@ describe("Cross-Repo Token Exchange Input Validation", () => {
 
 	it("rejects requests missing repo in body", async () => {
 		const { handleExchangeTokenForRepo } = await import("../src/oidc");
-		const result = await handleExchangeTokenForRepo(mockEnv, "Bearer fake.jwt.token", {
+		const result = await handleExchangeTokenForRepo(testEnv, "Bearer fake.jwt.token", {
 			owner: "test-org",
 		});
 
 		expect("error" in result).toBe(true);
+	});
+});
+
+describe("PAT Exchange Security", () => {
+	const patEnvDisabled = createMockEnv(); // ENABLE_PAT_EXCHANGE not set - disabled by default
+	const patEnvEnabled = createMockEnv({ ENABLE_PAT_EXCHANGE: "true" });
+
+	it("rejects PAT exchange when disabled (default)", async () => {
+		const { handleExchangeTokenWithPAT } = await import("../src/oidc");
+		const result = await handleExchangeTokenWithPAT(patEnvDisabled, "Bearer github_pat_test123", {
+			owner: "test-org",
+			repo: "test-repo",
+		});
+
+		expect("error" in result).toBe(true);
+		expect((result as { error: string }).error).toBe("PAT exchange is disabled");
+	});
+
+	it("rejects non-PAT tokens even when enabled", async () => {
+		const { handleExchangeTokenWithPAT } = await import("../src/oidc");
+		const result = await handleExchangeTokenWithPAT(patEnvEnabled, "Bearer ghs_servicetoken123", {
+			owner: "test-org",
+			repo: "test-repo",
+		});
+
+		expect("error" in result).toBe(true);
+		expect((result as { error: string }).error).toContain("expected a GitHub PAT");
+	});
+
+	it("accepts github_pat_ prefix when enabled", async () => {
+		const { handleExchangeTokenWithPAT } = await import("../src/oidc");
+		// This will fail at the GitHub API call, but should pass the PAT format check
+		const result = await handleExchangeTokenWithPAT(patEnvEnabled, "Bearer github_pat_valid_format", {
+			owner: "test-org",
+			repo: "test-repo",
+		});
+
+		// Should fail on API call, not on format validation
+		expect("error" in result).toBe(true);
+		expect((result as { error: string }).error).not.toContain("expected a GitHub PAT");
+	});
+
+	it("accepts ghp_ prefix when enabled", async () => {
+		const { handleExchangeTokenWithPAT } = await import("../src/oidc");
+		// This will fail at the GitHub API call, but should pass the PAT format check
+		const result = await handleExchangeTokenWithPAT(patEnvEnabled, "Bearer ghp_valid_format", {
+			owner: "test-org",
+			repo: "test-repo",
+		});
+
+		// Should fail on API call, not on format validation
+		expect("error" in result).toBe(true);
+		expect((result as { error: string }).error).not.toContain("expected a GitHub PAT");
 	});
 });
 

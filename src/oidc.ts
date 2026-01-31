@@ -3,7 +3,7 @@ import { Octokit } from '@octokit/rest';
 import { RequestError } from '@octokit/request-error';
 import { jwtVerify, createRemoteJWKSet } from 'jose';
 import type { Env } from './types';
-import { hasWriteAccess } from './github';
+import { hasWriteAccess, getRepository } from './github';
 import { withRetry } from './retry';
 import { createLogger } from './log';
 
@@ -164,20 +164,6 @@ async function generateInstallationToken(
 	return token;
 }
 
-// Checks if an actor has write access to a repository using the app's installation token.
-// Reuses hasWriteAccess from github.ts per CONVENTIONS.md: "Keep functions related to external APIs in their respective files."
-async function checkActorWriteAccess(
-	env: Env,
-	installationId: number,
-	owner: string,
-	repo: string,
-	actor: string
-): Promise<boolean> {
-	const token = await generateInstallationToken(env, installationId);
-	const octokit = new Octokit({ auth: token });
-	return hasWriteAccess(octokit, owner, repo, actor);
-}
-
 // Response types for API endpoints
 export interface GetInstallationResponse {
 	installation: {
@@ -267,7 +253,8 @@ export async function handleExchangeToken(
 //
 // Security controls:
 // 1. Same-org restriction: The target repo must be in the same org/user as the source repo
-// 2. Actor write access: The actor (user who triggered the workflow) must have write access to the target repo
+// 2. Visibility restriction: Public repos cannot access private repos (prevents data exfiltration)
+// 3. Actor write access: The actor (user who triggered the workflow) must have write access to the target repo
 export async function handleExchangeTokenForRepo(
 	env: Env,
 	authHeader: string | null,
@@ -290,59 +277,113 @@ export async function handleExchangeTokenForRepo(
 		return { error: 'Missing owner or repo in request body' };
 	}
 
+	// Extract source repo info using validated helper (avoids fragile split pattern)
+	const { owner: sourceOwner, repo: sourceRepoName } = extractRepoFromClaims(validation.claims);
+	const sourceRepo = validation.claims.repository;
+	const targetRepo = `${body.owner}/${body.repo}`;
+	const actor = validation.claims.actor;
+	const crossRepoLog = createLogger({ actor, source_repo: sourceRepo, target_repo: targetRepo });
+
 	// Security check 1: Same-org restriction
 	// Only allow cross-repo access within the same org/user to prevent abuse
-	if (validation.claims.repository_owner !== body.owner) {
+	if (sourceOwner !== body.owner) {
+		crossRepoLog.warn('cross_repo_denied_cross_org', {
+			source_owner: sourceOwner,
+			target_owner: body.owner,
+		});
 		return {
-			error: `Cross-org access denied: workflow in ${validation.claims.repository_owner} cannot access repos in ${body.owner}`,
+			error: `Cross-org access denied: workflow in ${sourceOwner} cannot access repos in ${body.owner}`,
 		};
 	}
 
 	try {
-		// Get installation ID for the TARGET repository (throws on transient errors)
-		const installationId = await getInstallationId(env, body.owner, body.repo);
-		if (!installationId) {
-			return { error: `GitHub App not installed for ${body.owner}/${body.repo}` };
+		// Get installation IDs for both repos
+		const sourceInstallationId = await getInstallationId(env, sourceOwner, sourceRepoName);
+		if (!sourceInstallationId) {
+			return { error: `GitHub App not installed for ${sourceRepo}` };
 		}
 
-		// Security check 2: Actor write access
-		// The actor who triggered the workflow must have write access to the target repo
-		const actor = validation.claims.actor;
-		const hasAccess = await checkActorWriteAccess(env, installationId, body.owner, body.repo, actor);
-		if (!hasAccess) {
-			return {
-				error: `Access denied: ${actor} does not have write access to ${body.owner}/${body.repo}`,
-			};
+		const targetInstallationId = await getInstallationId(env, body.owner, body.repo);
+		if (!targetInstallationId) {
+			return { error: `GitHub App not installed for ${targetRepo}` };
 		}
 
-		// Generate scoped installation token for the target repo only.
-		// Token is restricted to:
-		// 1. Only the target repository (not all repos the app is installed on)
-		// 2. Minimum permissions needed for cross-repo operations (contents, pull_requests, issues)
-		const token = await generateInstallationToken(env, installationId, {
+		// Generate tokens once and reuse for all checks
+		// Source token: unscoped (just need to read repo metadata)
+		// Target token: scoped to target repo with required permissions
+		const sourceToken = await generateInstallationToken(env, sourceInstallationId);
+		const targetToken = await generateInstallationToken(env, targetInstallationId, {
 			repositoryNames: [body.repo],
 			permissions: {
-				contents: 'write', // Push commits
-				pull_requests: 'write', // Create PRs
-				issues: 'write', // Create comments
-				metadata: 'read', // Always implicitly included, but be explicit
+				contents: 'write',
+				pull_requests: 'write',
+				issues: 'write',
+				metadata: 'read',
 			},
 		});
 
-		return { token };
+		const sourceOctokit = new Octokit({ auth: sourceToken });
+		const targetOctokit = new Octokit({ auth: targetToken });
+
+		// Security check 2: Visibility restriction (check before write access - cheaper and fails fast)
+		// IMPORTANT: Public repos cannot access private repos. This prevents a malicious workflow
+		// in a public repo from exfiltrating code from private repos in the same org, even if the
+		// actor has write access to both. The threat model is: an attacker forks a public repo,
+		// triggers a workflow, and uses the cross-repo tool to clone a private repo and leak its contents.
+		const sourceData = await getRepository(sourceOctokit, sourceOwner, sourceRepoName);
+		const targetData = await getRepository(targetOctokit, body.owner, body.repo);
+		const sourceVisibility = sourceData.visibility as 'public' | 'private' | 'internal';
+		const targetVisibility = targetData.visibility as 'public' | 'private' | 'internal';
+
+		if (sourceVisibility === 'public' && targetVisibility !== 'public') {
+			crossRepoLog.warn('cross_repo_denied_visibility', {
+				source_visibility: sourceVisibility,
+				target_visibility: targetVisibility,
+			});
+			return {
+				error: `Cross-repo access denied: public repos cannot access private/internal repos`,
+			};
+		}
+
+		// Security check 3: Actor write access
+		// The actor who triggered the workflow must have write access to the target repo
+		const hasAccess = await hasWriteAccess(targetOctokit, body.owner, body.repo, actor);
+		if (!hasAccess) {
+			crossRepoLog.warn('cross_repo_denied_no_write_access');
+			return {
+				error: `Access denied: ${actor} does not have write access to ${targetRepo}`,
+			};
+		}
+
+		// Audit log: successful cross-repo token issuance
+		crossRepoLog.info('cross_repo_token_issued', {
+			source_visibility: sourceVisibility,
+			target_visibility: targetVisibility,
+			run_id: validation.claims.run_id,
+			workflow: validation.claims.job_workflow_ref,
+		});
+
+		// Return the already-scoped target token
+		return { token: targetToken };
 	} catch (err) {
-		createLogger({ owner: body.owner, repo: body.repo }).errorWithException('cross_repo_token_generation_failed', err);
-		return { error: `Failed to generate token for ${body.owner}/${body.repo}` };
+		crossRepoLog.errorWithException('cross_repo_token_generation_failed', err);
+		return { error: `Failed to generate token for ${targetRepo}` };
 	}
 }
 
 // Handler for POST /exchange_github_app_token_with_pat
-// Exchanges a GitHub PAT for a GitHub App installation token (for testing/local development)
+// Exchanges a GitHub PAT for a GitHub App installation token (for testing/local development).
+// DISABLED BY DEFAULT - set ENABLE_PAT_EXCHANGE=true to enable.
 export async function handleExchangeTokenWithPAT(
 	env: Env,
 	authHeader: string | null,
 	body: { owner?: string; repo?: string }
 ): Promise<ExchangeTokenResponse | ErrorResponse> {
+	// Security: PAT exchange is disabled by default. Only enable for local development/testing.
+	if (env.ENABLE_PAT_EXCHANGE !== 'true') {
+		return { error: 'PAT exchange is disabled' };
+	}
+
 	if (!authHeader?.startsWith('Bearer ')) {
 		return { error: 'Missing or invalid Authorization header' };
 	}
@@ -358,15 +399,19 @@ export async function handleExchangeTokenWithPAT(
 		return { error: 'Missing owner or repo in request body' };
 	}
 
+	const patLog = createLogger({ owner: body.owner, repo: body.repo });
+
 	// Verify the PAT has write access to the repository
 	const octokit = new Octokit({ auth: pat });
 	try {
 		const { data: repoData } = await octokit.repos.get({ owner: body.owner, repo: body.repo });
 		const permissions = repoData.permissions;
 		if (!permissions?.admin && !permissions?.push && !permissions?.maintain) {
+			patLog.warn('pat_exchange_denied_no_write_access');
 			return { error: `PAT does not have write permissions for ${body.owner}/${body.repo}` };
 		}
 	} catch {
+		patLog.warn('pat_exchange_denied_no_access');
 		return { error: `PAT does not have access to ${body.owner}/${body.repo}` };
 	}
 
@@ -390,9 +435,12 @@ export async function handleExchangeTokenWithPAT(
 			},
 		});
 
+		// Audit log: PAT exchange (useful for tracking local dev usage)
+		patLog.info('pat_token_exchanged');
+
 		return { token };
 	} catch (err) {
-		createLogger({ owner: body.owner, repo: body.repo }).errorWithException('pat_token_exchange_failed', err);
+		patLog.errorWithException('pat_token_exchange_failed', err);
 		return { error: `Failed to generate token for ${body.owner}/${body.repo}` };
 	}
 }
