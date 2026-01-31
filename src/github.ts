@@ -5,6 +5,7 @@ import { createAppAuth } from '@octokit/auth-app';
 import { Webhooks } from '@octokit/webhooks';
 import { graphql } from '@octokit/graphql';
 import type { Env, GitHubIssue, GitHubPullRequest, IssueQueryResponse, PullRequestQueryResponse } from './types';
+import { withRetry } from './retry';
 
 const ResilientOctokit = Octokit.plugin(retry, throttling);
 
@@ -15,7 +16,7 @@ export async function createOctokit(env: Env, installationId: number): Promise<O
 		installationId,
 	});
 
-	const { token } = await auth({ type: 'installation' });
+	const { token } = await withRetry(() => auth({ type: 'installation' }), 'createOctokit.auth');
 
 	return new ResilientOctokit({
 		auth: token,
@@ -46,7 +47,7 @@ export async function createGraphQL(env: Env, installationId: number): Promise<t
 		installationId,
 	});
 
-	const { token } = await auth({ type: 'installation' });
+	const { token } = await withRetry(() => auth({ type: 'installation' }), 'createGraphQL.auth');
 
 	return graphql.defaults({
 		headers: { authorization: `token ${token}` },
@@ -60,7 +61,7 @@ export async function getInstallationToken(env: Env, installationId: number): Pr
 		installationId,
 	});
 
-	const { token } = await auth({ type: 'installation' });
+	const { token } = await withRetry(() => auth({ type: 'installation' }), 'getInstallationToken.auth');
 	return token;
 }
 
@@ -548,7 +549,7 @@ export async function deleteInstallation(env: Env, installationId: number): Prom
 		privateKey: env.GITHUB_APP_PRIVATE_KEY,
 	});
 
-	const { token } = await auth({ type: 'app' });
+	const { token } = await withRetry(() => auth({ type: 'app' }), 'deleteInstallation.auth');
 	const octokit = new ResilientOctokit({ auth: token });
 	await octokit.apps.deleteInstallation({ installation_id: installationId });
 }

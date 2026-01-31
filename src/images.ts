@@ -1,4 +1,5 @@
 import type { ImageData } from "./types";
+import { withRetry } from "./retry";
 
 // Extracts GitHub user-attachments (images/files) from comment markdown
 // and converts them to base64 for the AI prompt
@@ -74,23 +75,25 @@ async function downloadFile(
 	accessToken: string
 ): Promise<{ mime: string; content: string } | null> {
 	try {
-		const response = await fetch(url, {
-			headers: {
-				Authorization: `Bearer ${accessToken}`,
-				Accept: "application/vnd.github.v3+json",
-			},
-		});
+		return await withRetry(async () => {
+			const response = await fetch(url, {
+				headers: {
+					Authorization: `Bearer ${accessToken}`,
+					Accept: "application/vnd.github.v3+json",
+				},
+			});
 
-		if (!response.ok) {
-			return null;
-		}
+			if (!response.ok) {
+				throw new Error(`HTTP ${response.status}`);
+			}
 
-		const contentType = response.headers.get("content-type") || "application/octet-stream";
-		const arrayBuffer = await response.arrayBuffer();
-		const base64 = arrayBufferToBase64(arrayBuffer);
-		const mime = contentType.startsWith("image/") ? contentType : "text/plain";
+			const contentType = response.headers.get("content-type") || "application/octet-stream";
+			const arrayBuffer = await response.arrayBuffer();
+			const base64 = arrayBufferToBase64(arrayBuffer);
+			const mime = contentType.startsWith("image/") ? contentType : "text/plain";
 
-		return { mime, content: base64 };
+			return { mime, content: base64 };
+		}, 'downloadFile');
 	} catch (error) {
 		console.error(`Error downloading file: ${error}`);
 		return null;

@@ -4,38 +4,10 @@ import { RequestError } from '@octokit/request-error';
 import { jwtVerify, createRemoteJWKSet } from 'jose';
 import type { Env } from './types';
 import { hasWriteAccess } from './github';
+import { withRetry } from './retry';
 
 // GitHub's OIDC token issuer for Actions
 const GITHUB_ACTIONS_ISSUER = 'https://token.actions.githubusercontent.com';
-
-// Retry helper for transient failures (network, rate limits).
-// 3 attempts total, exponential backoff starting at 5s (5s, 10s).
-async function withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
-	const maxAttempts = 3;
-	const baseDelayMs = 5000;
-
-	for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-		try {
-			return await fn();
-		} catch (err) {
-			// Don't retry client errors (4xx) - they won't succeed on retry
-			if (err instanceof RequestError && err.status >= 400 && err.status < 500) {
-				throw err;
-			}
-
-			if (attempt === maxAttempts) {
-				throw err;
-			}
-
-			const delayMs = baseDelayMs * Math.pow(2, attempt - 1);
-			console.warn(`[${label}] Attempt ${attempt}/${maxAttempts} failed, retrying in ${delayMs}ms:`, err);
-			await new Promise((resolve) => setTimeout(resolve, delayMs));
-		}
-	}
-
-	// TypeScript: unreachable, but needed for type inference
-	throw new Error('Retry exhausted');
-}
 
 // TTL for cached installation IDs (30 minutes)
 export const APP_INSTALLATION_CACHE_TTL_SECS = 1800;
@@ -187,7 +159,7 @@ async function generateInstallationToken(
 		authOptions.permissions = options.permissions;
 	}
 
-	const { token } = await auth(authOptions);
+	const { token } = await withRetry(() => auth(authOptions), 'generateInstallationToken.auth');
 	return token;
 }
 
@@ -282,8 +254,8 @@ export async function handleExchangeToken(
 
 		return { token };
 	} catch (err) {
-		const message = err instanceof Error ? err.message : 'Unknown error';
-		return { error: `Failed to generate token for ${owner}/${repo}: ${message}` };
+		console.error(`[${owner}/${repo}] Token generation failed:`, err);
+		return { error: `Failed to generate token for ${owner}/${repo}` };
 	}
 }
 
@@ -358,8 +330,8 @@ export async function handleExchangeTokenForRepo(
 
 		return { token };
 	} catch (err) {
-		const message = err instanceof Error ? err.message : 'Unknown error';
-		return { error: `Failed to generate token for ${body.owner}/${body.repo}: ${message}` };
+		console.error(`[${body.owner}/${body.repo}] Cross-repo token generation failed:`, err);
+		return { error: `Failed to generate token for ${body.owner}/${body.repo}` };
 	}
 }
 
@@ -419,7 +391,7 @@ export async function handleExchangeTokenWithPAT(
 
 		return { token };
 	} catch (err) {
-		const message = err instanceof Error ? err.message : 'Unknown error';
-		return { error: `Failed to generate token for ${body.owner}/${body.repo}: ${message}` };
+		console.error(`[${body.owner}/${body.repo}] PAT token exchange failed:`, err);
+		return { error: `Failed to generate token for ${body.owner}/${body.repo}` };
 	}
 }

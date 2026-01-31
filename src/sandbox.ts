@@ -3,6 +3,7 @@ import { createOpencode } from "@cloudflare/sandbox/opencode";
 import type { Config, OpencodeClient } from "@opencode-ai/sdk";
 import { DEFAULT_MODEL, type Env, type AskRequest } from "./types";
 import { getInstallationToken } from "./github";
+import { withRetry } from "./retry";
 
 // Runs OpenCode in the sandbox for the /ask endpoint.
 // Returns an SSE stream of events from the OpenCode session.
@@ -32,10 +33,10 @@ export async function runAsk(
 
 	// Clone repository
 	try {
-		await sandbox.gitCheckout(repoUrl, {
-			targetDir: workDir,
-			branch: undefined, // default branch
-		});
+		await withRetry(
+			() => sandbox.gitCheckout(repoUrl, { targetDir: workDir, branch: undefined }),
+			'sandbox.gitCheckout'
+		);
 	} catch (error) {
 		console.error(`${logPrefix} Failed to clone repository:`, error);
 		throw error;
@@ -75,10 +76,10 @@ export async function runAsk(
 	// Start OpenCode in sandbox
 	let client: OpencodeClient;
 	try {
-		const opencode = await createOpencode<OpencodeClient>(sandbox, {
-			directory: workDir,
-			config: opencodeConfig,
-		});
+		const opencode = await withRetry(
+			() => createOpencode<OpencodeClient>(sandbox, { directory: workDir, config: opencodeConfig }),
+			'sandbox.createOpencode'
+		);
 		client = opencode.client;
 	} catch (error) {
 		console.error(`${logPrefix} Failed to start OpenCode:`, error);
@@ -86,10 +87,10 @@ export async function runAsk(
 	}
 
 	// Create session
-	const session = await client.session.create({
-		body: { title: `Ask: ${owner}/${repo}` },
-		query: { directory: workDir },
-	});
+	const session = await withRetry(
+		() => client.session.create({ body: { title: `Ask: ${owner}/${repo}` }, query: { directory: workDir } }),
+		'opencode.session.create'
+	);
 
 	if (!session.data) {
 		throw new Error("Failed to create OpenCode session");
@@ -130,15 +131,18 @@ export async function runAsk(
 		try {
 			await sendEvent("session", { id: sessionId, askId });
 
-			const promptResult = await client.session.prompt({
-				path: { id: sessionId },
-				query: { directory: workDir },
-				body: {
-					model: { providerID, modelID },
-					agent: agent ?? undefined,
-					parts: [{ type: "text", text: prompt }],
-				},
-			});
+			const promptResult = await withRetry(
+				() => client.session.prompt({
+					path: { id: sessionId },
+					query: { directory: workDir },
+					body: {
+						model: { providerID, modelID },
+						agent: agent ?? undefined,
+						parts: [{ type: "text", text: prompt }],
+					},
+				}),
+				'opencode.session.prompt'
+			);
 
 			const parts = promptResult.data?.parts ?? [];
 			const textPart = parts.find((p: { type: string }) => p.type === "text") as
