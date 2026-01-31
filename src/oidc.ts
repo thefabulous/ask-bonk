@@ -5,6 +5,7 @@ import { jwtVerify, createRemoteJWKSet } from 'jose';
 import type { Env } from './types';
 import { hasWriteAccess } from './github';
 import { withRetry } from './retry';
+import { createLogger } from './log';
 
 // GitHub's OIDC token issuer for Actions
 const GITHUB_ACTIONS_ISSUER = 'https://token.actions.githubusercontent.com';
@@ -79,16 +80,16 @@ export function extractRepoFromClaims(claims: GitHubActionsJWTClaims): { owner: 
 // Gets or looks up the installation ID for a repository.
 // Returns null if the app is not installed. Throws on transient errors (network, rate limit).
 export async function getInstallationId(env: Env, owner: string, repo: string): Promise<number | null> {
-	const repoKey = `${owner}/${repo}`;
+	const installLog = createLogger({ owner, repo });
 
 	// Check cache first, with validation
-	const cached = await env.APP_INSTALLATIONS.get(repoKey);
+	const cached = await env.APP_INSTALLATIONS.get(`${owner}/${repo}`);
 	if (cached) {
 		const id = parseInt(cached, 10);
 		if (!Number.isNaN(id)) {
 			return id;
 		}
-		console.warn(`[${repoKey}] Invalid cached installation ID "${cached}", refetching`);
+		installLog.warn('installation_cache_invalid', { cached_value: cached });
 	}
 
 	// Look up via GitHub API using the app's JWT
@@ -103,12 +104,12 @@ export async function getInstallationId(env: Env, owner: string, repo: string): 
 	try {
 		const response = await withRetry(
 			() => octokit.apps.getRepoInstallation({ owner, repo }),
-			`getInstallationId(${repoKey})`
+			`getInstallationId(${owner}/${repo})`
 		);
 		const installationId = response.data.id;
 
 		// Cache for future use
-		await env.APP_INSTALLATIONS.put(repoKey, String(installationId), { expirationTtl: APP_INSTALLATION_CACHE_TTL_SECS });
+		await env.APP_INSTALLATIONS.put(`${owner}/${repo}`, String(installationId), { expirationTtl: APP_INSTALLATION_CACHE_TTL_SECS });
 		return installationId;
 	} catch (err) {
 		// 404 = app not installed on this repo (expected case)
@@ -254,7 +255,7 @@ export async function handleExchangeToken(
 
 		return { token };
 	} catch (err) {
-		console.error(`[${owner}/${repo}] Token generation failed:`, err);
+		createLogger({ owner, repo }).errorWithException('token_generation_failed', err);
 		return { error: `Failed to generate token for ${owner}/${repo}` };
 	}
 }
@@ -330,7 +331,7 @@ export async function handleExchangeTokenForRepo(
 
 		return { token };
 	} catch (err) {
-		console.error(`[${body.owner}/${body.repo}] Cross-repo token generation failed:`, err);
+		createLogger({ owner: body.owner, repo: body.repo }).errorWithException('cross_repo_token_generation_failed', err);
 		return { error: `Failed to generate token for ${body.owner}/${body.repo}` };
 	}
 }
@@ -391,7 +392,7 @@ export async function handleExchangeTokenWithPAT(
 
 		return { token };
 	} catch (err) {
-		console.error(`[${body.owner}/${body.repo}] PAT token exchange failed:`, err);
+		createLogger({ owner: body.owner, repo: body.repo }).errorWithException('pat_token_exchange_failed', err);
 		return { error: `Failed to generate token for ${body.owner}/${body.repo}` };
 	}
 }

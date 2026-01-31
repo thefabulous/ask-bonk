@@ -1,5 +1,6 @@
 import type { ImageData } from "./types";
 import { withRetry } from "./retry";
+import { log } from "./log";
 
 // Extracts GitHub user-attachments (images/files) from comment markdown
 // and converts them to base64 for the AI prompt
@@ -40,7 +41,7 @@ export async function extractImages(
 		const filename = getFilename(url);
 		const fileData = await downloadFile(url, accessToken);
 		if (!fileData) {
-			console.error(`Failed to download: ${url}`);
+			// Error already logged in downloadFile with exception details
 			continue;
 		}
 
@@ -95,7 +96,7 @@ async function downloadFile(
 			return { mime, content: base64 };
 		}, 'downloadFile');
 	} catch (error) {
-		console.error(`Error downloading file: ${error}`);
+		log.errorWithException('file_download_error', error, { url });
 		return null;
 	}
 }

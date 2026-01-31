@@ -5,6 +5,7 @@ import type {
 	PullRequestReviewEvent,
 } from "@octokit/webhooks-types";
 import { DEFAULT_MODEL, type Env, type EventContext, type ReviewCommentContext, type ScheduledEventContext, type WorkflowDispatchContext, type ScheduleEventPayload, type WorkflowDispatchPayload } from "./types";
+import { log } from "./log";
 
 export function extractPrompt(body: string, reviewContext?: ReviewCommentContext): string {
 	const trimmed = body.trim();
@@ -171,7 +172,7 @@ export function parseIssuesEvent(payload: IssuesEvent): {
 		};
 	}
 
-	console.log(`Unsupported issues event action: ${payload.action}`);
+	log.info('issues_event_unsupported_action', { action: payload.action });
 	return null;
 }
 

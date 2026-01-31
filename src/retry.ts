@@ -1,4 +1,5 @@
 import { RequestError } from '@octokit/request-error';
+import { log, sanitizeSecrets } from './log';
 
 // Retry helper for transient failures (network, rate limits).
 // 3 attempts total, exponential backoff starting at 5s (5s, 10s).
@@ -20,7 +21,14 @@ export async function withRetry<T>(fn: () => Promise<T>, label: string): Promise
 			}
 
 			const delayMs = baseDelayMs * Math.pow(2, attempt - 1);
-			console.warn(`[${label}] Attempt ${attempt}/${maxAttempts} failed, retrying in ${delayMs}ms:`, err);
+			const rawMessage = err instanceof Error ? err.message : String(err);
+			log.warn('retry_attempt_failed', {
+				label,
+				attempt,
+				max_attempts: maxAttempts,
+				delay_ms: delayMs,
+				error_message: sanitizeSecrets(rawMessage),
+			});
 			await new Promise((resolve) => setTimeout(resolve, delayMs));
 		}
 	}

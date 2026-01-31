@@ -13,6 +13,7 @@ import {
 import type { ScheduleEventPayload, WorkflowDispatchPayload } from "../src/types";
 import type { IssuesEvent } from "@octokit/webhooks-types";
 import { extractRepoFromClaims } from "../src/oidc";
+import { sanitizeSecrets } from "../src/log";
 import type { Env } from "../src/types";
 import type {
 	IssueCommentEvent,
@@ -447,5 +448,39 @@ describe("Cross-Repo Token Exchange Input Validation", () => {
 		});
 
 		expect("error" in result).toBe(true);
+	});
+});
+
+describe("Logging Security", () => {
+	it("redacts tokens in HTTPS URLs", () => {
+		const url = "https://x-access-token:ghp_secret123@github.com/owner/repo.git";
+		const sanitized = sanitizeSecrets(url);
+		expect(sanitized).toBe("https://x-access-token:[REDACTED]@github.com/owner/repo.git");
+		expect(sanitized).not.toContain("ghp_secret123");
+	});
+
+	it("redacts tokens in error messages containing URLs", () => {
+		const message = "Failed to clone https://x-access-token:ghs_token456@github.com/org/repo.git: permission denied";
+		const sanitized = sanitizeSecrets(message);
+		expect(sanitized).toBe("Failed to clone https://x-access-token:[REDACTED]@github.com/org/repo.git: permission denied");
+		expect(sanitized).not.toContain("ghs_token456");
+	});
+
+	it("handles multiple URLs in the same string", () => {
+		const message = "Tried https://user:pass1@example.com and https://other:pass2@example.org";
+		const sanitized = sanitizeSecrets(message);
+		expect(sanitized).not.toContain("pass1");
+		expect(sanitized).not.toContain("pass2");
+		expect(sanitized).toContain("[REDACTED]");
+	});
+
+	it("preserves strings without URLs", () => {
+		const message = "Normal error message without any URLs";
+		expect(sanitizeSecrets(message)).toBe(message);
+	});
+
+	it("preserves URLs without credentials", () => {
+		const message = "See https://github.com/owner/repo for details";
+		expect(sanitizeSecrets(message)).toBe(message);
 	});
 });

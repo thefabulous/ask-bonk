@@ -4,6 +4,7 @@ import type { Config, OpencodeClient } from "@opencode-ai/sdk";
 import { DEFAULT_MODEL, type Env, type AskRequest } from "./types";
 import { getInstallationToken } from "./github";
 import { withRetry } from "./retry";
+import { createLogger } from "./log";
 
 // Runs OpenCode in the sandbox for the /ask endpoint.
 // Returns an SSE stream of events from the OpenCode session.
@@ -23,7 +24,7 @@ export async function runAsk(
 	request: AskRequest,
 ): Promise<ReadableStream> {
 	const { id: askId, owner, repo, prompt, agent, model, config } = request;
-	const logPrefix = `[${owner}/${repo}][ask:${askId}]`;
+	const log = createLogger({ owner, repo, ask_id: askId, installation_id: installationId });
 
 	const token = await getInstallationToken(env, installationId);
 	const sandboxId = `${owner}-${repo}-${Date.now()}`;
@@ -38,7 +39,7 @@ export async function runAsk(
 			'sandbox.gitCheckout'
 		);
 	} catch (error) {
-		console.error(`${logPrefix} Failed to clone repository:`, error);
+		log.errorWithException('sandbox_clone_failed', error);
 		throw error;
 	}
 
@@ -48,7 +49,7 @@ export async function runAsk(
 		{ cwd: workDir },
 	);
 	if (!gitConfigResult.success) {
-		console.error(`${logPrefix} Git config failed:`, gitConfigResult.stderr);
+		log.error('sandbox_git_config_failed', { stderr: gitConfigResult.stderr });
 	}
 
 	// Configure credential helper for git push
@@ -82,7 +83,7 @@ export async function runAsk(
 		);
 		client = opencode.client;
 	} catch (error) {
-		console.error(`${logPrefix} Failed to start OpenCode:`, error);
+		log.errorWithException('sandbox_opencode_start_failed', error);
 		throw error;
 	}
 
@@ -118,16 +119,18 @@ export async function runAsk(
 			await writer.write(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
 			return true;
 		} catch (error) {
-			console.error(`${logPrefix} Failed to write SSE event '${event}':`, error);
+			log.errorWithException('sandbox_sse_write_failed', error, { event });
 			return false;
 		}
 	};
 
 	// Run the prompt in the background and stream events
 	const sessionId = session.data!.id;
-	const sessionLogPrefix = `${logPrefix}[session:${sessionId}]`;
+	const sessionLog = log.child({ session_id: sessionId });
+	const promptStartTime = Date.now();
 
 	(async () => {
+		let success = false;
 		try {
 			await sendEvent("session", { id: sessionId, askId });
 
@@ -169,17 +172,22 @@ export async function runAsk(
 			});
 
 			await sendEvent("done", { success: true });
+			success = true;
 		} catch (error) {
-			const message = error instanceof Error ? error.message : "Unknown error";
-			console.error(`${sessionLogPrefix} Prompt failed:`, message);
+			sessionLog.errorWithException('sandbox_prompt_failed', error, { duration_ms: Date.now() - promptStartTime });
 			// Try to send error event, but don't fail if stream is already closed
+			const message = error instanceof Error ? error.message : "Unknown error";
 			await sendEvent("error", { message, askId, sessionId });
 		} finally {
+			// Log completion with duration
+			if (success) {
+				sessionLog.info('sandbox_prompt_completed', { duration_ms: Date.now() - promptStartTime });
+			}
 			// Safely close the writer, ignoring errors if already closed
 			try {
 				await writer.close();
 			} catch (closeError) {
-				console.error(`${sessionLogPrefix} Failed to close SSE writer:`, closeError);
+				sessionLog.errorWithException('sandbox_sse_close_failed', closeError);
 			}
 		}
 	})();

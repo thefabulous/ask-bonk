@@ -19,6 +19,7 @@ import { RepoAgent } from './agent';
 import { runAsk } from './sandbox';
 import { getAgentByName } from 'agents';
 import { emitMetric, queryAnalyticsEngine, renderBarChart, eventsPerRepoQuery } from './metrics';
+import { log, createLogger } from './log';
 
 export { Sandbox } from '@cloudflare/sandbox';
 export { RepoAgent };
@@ -62,7 +63,7 @@ app.get('/stats', async (c) => {
 		const chart = renderBarChart(data as { repo: string; event_type: string; event_count: number }[], 'Events per repo (last 30d)');
 		return c.text(chart);
 	} catch (error) {
-		console.error('[stats] Query failed:', error);
+		log.errorWithException('stats_query_failed', error);
 		return c.json({ error: 'Failed to query stats' }, 500);
 	}
 });
@@ -89,6 +90,7 @@ ask.use('*', async (c, next) => {
 });
 
 ask.post('/', async (c) => {
+	const startTime = Date.now();
 	const askId = ulid();
 	let rawBody: Omit<AskRequest, 'id'>;
 	try {
@@ -104,18 +106,18 @@ ask.post('/', async (c) => {
 
 	// Build full request with ID
 	const body: AskRequest = { id: askId, ...rawBody };
-	const repoKey = `${body.owner}/${body.repo}`;
-	const logPrefix = `[${repoKey}][ask:${askId}]`;
+	const askLog = createLogger({ request_id: askId, owner: body.owner, repo: body.repo });
 
 	// Look up installation ID for this repo (uses cache, falls back to GitHub API)
 	const installationId = await getInstallationId(c.env, body.owner, body.repo);
 	if (!installationId) {
-		console.error(`${logPrefix} No GitHub App installation found`);
-		return c.json({ error: `No GitHub App installation found for ${repoKey}` }, 404);
+		askLog.error('ask_no_installation', { duration_ms: Date.now() - startTime });
+		return c.json({ error: `No GitHub App installation found for ${body.owner}/${body.repo}` }, 404);
 	}
 
 	try {
 		const stream = await runAsk(c.env, installationId, body);
+		// duration_ms logged in sandbox.ts when prompt completes (sandbox_prompt_completed)
 		return new Response(stream, {
 			headers: {
 				'Content-Type': 'text/event-stream',
@@ -124,9 +126,8 @@ ask.post('/', async (c) => {
 			},
 		});
 	} catch (error) {
-		const message = error instanceof Error ? error.message : 'Unknown error';
-		console.error(`${logPrefix} Ask failed:`, message);
-		return c.json({ error: message }, 500);
+		askLog.errorWithException('ask_failed', error, { duration_ms: Date.now() - startTime });
+		return c.json({ error: error instanceof Error ? error.message : 'Unknown error' }, 500);
 	}
 });
 
@@ -201,6 +202,8 @@ const apiGithub = new Hono<{ Bindings: Env }>();
 
 // POST /api/github/setup - Check if workflow file exists, create PR if not
 apiGithub.post('/setup', async (c) => {
+	const startTime = Date.now();
+	const requestId = ulid();
 	const authHeader = c.req.header('Authorization');
 	if (!authHeader?.startsWith('Bearer ')) {
 		return c.json({ error: 'Missing or invalid Authorization header' }, 401);
@@ -230,12 +233,12 @@ apiGithub.post('/setup', async (c) => {
 		return c.json({ error: `OIDC token is for ${claimsOwner}/${claimsRepo}, not ${body.owner}/${body.repo}` }, 403);
 	}
 
-	const logPrefix = `[${body.owner}/${body.repo}#${body.issue_number}]`;
+	const setupLog = createLogger({ request_id: requestId, owner: body.owner, repo: body.repo, issue_number: body.issue_number });
 
 	// Look up installation ID
 	const installationId = await getInstallationId(c.env, body.owner, body.repo);
 	if (!installationId) {
-		console.error(`${logPrefix} No GitHub App installation found`);
+		setupLog.error('setup_no_installation', { duration_ms: Date.now() - startTime });
 		return c.json({ error: `No GitHub App installation found for ${body.owner}/${body.repo}` }, 404);
 	}
 
@@ -243,7 +246,7 @@ apiGithub.post('/setup', async (c) => {
 		const octokit = await createOctokit(c.env, installationId);
 		const result = await ensureWorkflowFile(octokit, body.owner, body.repo, body.issue_number, body.default_branch);
 
-		console.info(`${logPrefix} Setup result: exists=${result.exists}, prUrl=${result.prUrl ?? 'none'}`);
+		setupLog.info('setup_completed', { exists: result.exists, pr_url: result.prUrl ?? null, duration_ms: Date.now() - startTime });
 		emitMetric(c.env, {
 			repo: `${body.owner}/${body.repo}`,
 			eventType: 'setup',
@@ -253,7 +256,7 @@ apiGithub.post('/setup', async (c) => {
 		return c.json(result);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : 'Unknown error';
-		console.error(`${logPrefix} Setup failed:`, message);
+		setupLog.errorWithException('setup_failed', error, { duration_ms: Date.now() - startTime });
 		emitMetric(c.env, {
 			repo: `${body.owner}/${body.repo}`,
 			eventType: 'setup',
@@ -267,6 +270,8 @@ apiGithub.post('/setup', async (c) => {
 
 // POST /api/github/track - Start tracking a workflow run
 apiGithub.post('/track', async (c) => {
+	const startTime = Date.now();
+	const requestId = ulid();
 	const authHeader = c.req.header('Authorization');
 	if (!authHeader?.startsWith('Bearer ')) {
 		return c.json({ error: 'Missing or invalid Authorization header' }, 401);
@@ -296,12 +301,12 @@ apiGithub.post('/track', async (c) => {
 		return c.json({ error: `OIDC token is for ${claimsOwner}/${claimsRepo}, not ${body.owner}/${body.repo}` }, 403);
 	}
 
-	const logPrefix = `[${body.owner}/${body.repo}#${body.issue_number}]`;
+	const trackLog = createLogger({ request_id: requestId, owner: body.owner, repo: body.repo, issue_number: body.issue_number, run_id: body.run_id });
 
 	// Look up installation ID
 	const installationId = await getInstallationId(c.env, body.owner, body.repo);
 	if (!installationId) {
-		console.error(`${logPrefix} No GitHub App installation found`);
+		trackLog.error('track_no_installation', { duration_ms: Date.now() - startTime });
 		return c.json({ error: `No GitHub App installation found for ${body.owner}/${body.repo}` }, 404);
 	}
 
@@ -317,7 +322,7 @@ apiGithub.post('/track', async (c) => {
 					: 'issue';
 
 			await createReaction(octokit, body.owner, body.repo, targetId, '+1', reactionTarget);
-			console.info(`${logPrefix} Created reaction on ${reactionTarget} ${targetId}`);
+			trackLog.info('reaction_created', { target_type: reactionTarget, target_id: targetId });
 		}
 
 		// Get/create RepoAgent and start tracking
@@ -325,7 +330,7 @@ apiGithub.post('/track', async (c) => {
 		await agent.setInstallationId(installationId);
 		await agent.trackRun(body.run_id, body.run_url, body.issue_number);
 
-		console.info(`${logPrefix} Started tracking run ${body.run_id}`);
+		trackLog.info('track_completed', { run_url: body.run_url, duration_ms: Date.now() - startTime });
 		emitMetric(c.env, {
 			repo: `${body.owner}/${body.repo}`,
 			eventType: 'track',
@@ -336,7 +341,7 @@ apiGithub.post('/track', async (c) => {
 		return c.json({ ok: true });
 	} catch (error) {
 		const message = error instanceof Error ? error.message : 'Unknown error';
-		console.error(`${logPrefix} Track failed:`, message);
+		trackLog.errorWithException('track_failed', error, { duration_ms: Date.now() - startTime });
 		emitMetric(c.env, {
 			repo: `${body.owner}/${body.repo}`,
 			eventType: 'track',
@@ -351,6 +356,8 @@ apiGithub.post('/track', async (c) => {
 
 // PUT /api/github/track - Finalize tracking a workflow run
 apiGithub.put('/track', async (c) => {
+	const startTime = Date.now();
+	const requestId = ulid();
 	const authHeader = c.req.header('Authorization');
 	if (!authHeader?.startsWith('Bearer ')) {
 		return c.json({ error: 'Missing or invalid Authorization header' }, 401);
@@ -380,12 +387,12 @@ apiGithub.put('/track', async (c) => {
 		return c.json({ error: `OIDC token is for ${claimsOwner}/${claimsRepo}, not ${body.owner}/${body.repo}` }, 403);
 	}
 
-	const logPrefix = `[${body.owner}/${body.repo}]`;
+	const finalizeLog = createLogger({ request_id: requestId, owner: body.owner, repo: body.repo, run_id: body.run_id });
 
 	// Look up installation ID
 	const installationId = await getInstallationId(c.env, body.owner, body.repo);
 	if (!installationId) {
-		console.error(`${logPrefix} No GitHub App installation found`);
+		finalizeLog.error('finalize_no_installation', { duration_ms: Date.now() - startTime });
 		return c.json({ error: `No GitHub App installation found for ${body.owner}/${body.repo}` }, 404);
 	}
 
@@ -395,7 +402,7 @@ apiGithub.put('/track', async (c) => {
 		await agent.setInstallationId(installationId);
 		await agent.finalizeRun(body.run_id, body.status);
 
-		console.info(`${logPrefix} Finalized run ${body.run_id} with status ${body.status}`);
+		finalizeLog.info('finalize_completed', { status: body.status, duration_ms: Date.now() - startTime });
 		emitMetric(c.env, {
 			repo: `${body.owner}/${body.repo}`,
 			eventType: 'finalize',
@@ -405,7 +412,7 @@ apiGithub.put('/track', async (c) => {
 		return c.json({ ok: true });
 	} catch (error) {
 		const message = error instanceof Error ? error.message : 'Unknown error';
-		console.error(`${logPrefix} Finalize failed:`, message);
+		finalizeLog.errorWithException('finalize_failed', error, { duration_ms: Date.now() - startTime });
 		emitMetric(c.env, {
 			repo: `${body.owner}/${body.repo}`,
 			eventType: 'finalize',
@@ -422,32 +429,23 @@ app.route('/api/github', apiGithub);
 
 export default app;
 
-function getWebhookLogContext(event: { name: string; payload: unknown }): string {
-	const payload = event.payload as Record<string, unknown>;
-	const repo = payload.repository as { owner?: { login?: string }; name?: string } | undefined;
-	const owner = repo?.owner?.login ?? 'unknown';
-	const repoName = repo?.name ?? 'unknown';
-	const issue = payload.issue as { number?: number } | undefined;
-	const pr = payload.pull_request as { number?: number } | undefined;
-	const num = issue?.number ?? pr?.number ?? '?';
-	return `${owner}/${repoName} - ${event.name} - #${num}`;
-}
-
 async function handleWebhook(request: Request, env: Env): Promise<Response> {
+	const startTime = Date.now();
+	const requestId = ulid();
 	const webhooks = createWebhooks(env);
 	const event = await verifyWebhook(webhooks, request);
 	if (!event) {
-		console.error('Webhook signature verification failed');
+		log.error('webhook_signature_invalid');
 		return new Response('Invalid signature', { status: 401 });
 	}
-
-	console.info(`Webhook: ${getWebhookLogContext(event)}`);
 
 	// Installation ID caching is handled by getInstallationId() in oidc.ts on cache miss.
 	// This avoids redundant KV writes on every webhook (see issue #52).
 	const payload = event.payload as Record<string, unknown>;
 	const repository = payload.repository as { owner?: { login?: string }; name?: string } | undefined;
-	const repoKey = repository?.owner?.login && repository?.name ? `${repository.owner.login}/${repository.name}` : 'unknown/unknown';
+	const owner = repository?.owner?.login;
+	const repoName = repository?.name;
+	const repoKey = owner && repoName ? `${owner}/${repoName}` : 'unknown/unknown';
 	const sender = (payload.sender as { login?: string })?.login;
 	const issue = payload.issue as { number?: number } | undefined;
 	const pr = payload.pull_request as { number?: number } | undefined;
@@ -455,25 +453,33 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
 	const isPrivate = (repository as { private?: boolean })?.private;
 	const isPullRequest = !!pr;
 
+	const webhookLog = createLogger({
+		request_id: requestId,
+		owner: owner ?? 'unknown',
+		repo: repoName ?? 'unknown',
+		issue_number: issueNumber,
+		actor: sender,
+	});
+
 	try {
 		// Handle meta events (installation) before other checks - these may delete installations
 		const isMetaEvent = META_EVENTS.includes(event.name as (typeof META_EVENTS)[number]);
 		if (isMetaEvent) {
 			await handleMetaEvent(event.name, event.payload, env);
+			webhookLog.info('webhook_completed', { event_type: event.name, is_private: isPrivate, is_pull_request: isPullRequest, duration_ms: Date.now() - startTime });
 			emitMetric(env, { repo: repoKey, eventType: 'installation', eventSubtype: event.name, status: 'success', actor: sender });
 			return new Response('OK', { status: 200 });
 		}
 
 		// Check if the repo owner is in the allowed list
-		const owner = repository?.owner?.login;
 		if (owner && !isAllowedOrg(owner, env)) {
-			console.info(`[${owner}] Org not in allowed list, skipping`);
+			webhookLog.info('webhook_skipped_not_allowed', { event_type: event.name, duration_ms: Date.now() - startTime });
 			emitMetric(env, { repo: repoKey, eventType: 'webhook', eventSubtype: event.name, status: 'skipped', actor: sender });
 			return new Response('OK', { status: 200 });
 		}
 
 		if (!SUPPORTED_EVENTS.includes(event.name as (typeof SUPPORTED_EVENTS)[number])) {
-			console.info(`Unsupported event type: ${event.name}`);
+			webhookLog.info('webhook_unsupported_event', { event_type: event.name, duration_ms: Date.now() - startTime });
 			return new Response('OK', { status: 200 });
 		}
 
@@ -486,6 +492,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
 			await handleRepoEvent(event.name, event.payload, env);
 		}
 
+		webhookLog.info('webhook_completed', { event_type: event.name, is_private: isPrivate, is_pull_request: isPullRequest, duration_ms: Date.now() - startTime });
 		emitMetric(env, {
 			repo: repoKey,
 			eventType: 'webhook',
@@ -498,7 +505,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
 		});
 		return new Response('OK', { status: 200 });
 	} catch (error) {
-		console.error(`Webhook error [${getWebhookLogContext(event)}]:`, error);
+		webhookLog.errorWithException('webhook_error', error, { event_type: event.name, duration_ms: Date.now() - startTime });
 		emitMetric(env, {
 			repo: repoKey,
 			eventType: 'webhook',
@@ -558,9 +565,11 @@ async function handleMetaEvent(eventName: string, payload: unknown, env: Env): P
 	const owner = p.installation?.account?.login;
 	if (!installationId || !owner) return;
 
+	const installLog = createLogger({ owner, installation_id: installationId });
+
 	// Log all installation events
 	if (p.action === 'deleted') {
-		console.info(`[${owner}] Installation ${installationId} removed by user`);
+		installLog.info('installation_deleted');
 		return;
 	}
 
@@ -568,17 +577,17 @@ async function handleMetaEvent(eventName: string, payload: unknown, env: Env): P
 
 	// New installation - check if allowed
 	if (isAllowedOrg(owner, env)) {
-		console.info(`[${owner}] Installation ${installationId} created and allowed`);
+		installLog.info('installation_created');
 		return;
 	}
 
 	// Org not in allowed list - delete the installation
-	console.info(`[${owner}] Installation ${installationId} rejected - org not in ALLOWED_ORGS, uninstalling`);
+	installLog.info('installation_rejected', { reason: 'org_not_in_allowed_list' });
 	try {
 		await deleteInstallation(env, installationId);
-		console.info(`[${owner}] Installation ${installationId} auto-deleted`);
+		installLog.info('installation_auto_deleted');
 	} catch (error) {
-		console.error(`[${owner}] Failed to delete installation ${installationId}:`, error);
+		installLog.errorWithException('installation_delete_failed', error);
 	}
 }
 
@@ -586,46 +595,56 @@ async function handleIssueComment(payload: IssueCommentEvent): Promise<void> {
 	const parsed = parseIssueCommentEvent(payload);
 	if (!parsed) return;
 
-	const logPrefix = `[${parsed.context.owner}/${parsed.context.repo}#${parsed.context.issueNumber}]`;
-	console.info(`${logPrefix} Issue comment event from ${parsed.context.actor}`);
+	createLogger({
+		owner: parsed.context.owner,
+		repo: parsed.context.repo,
+		issue_number: parsed.context.issueNumber,
+		actor: parsed.context.actor,
+	}).info('issue_comment_received');
 }
 
 async function handlePRReviewComment(payload: PullRequestReviewCommentEvent): Promise<void> {
 	const parsed = parsePRReviewCommentEvent(payload);
 	if (!parsed) return;
 
-	const logPrefix = `[${parsed.context.owner}/${parsed.context.repo}#${parsed.context.issueNumber}]`;
-	console.info(`${logPrefix} PR review comment event from ${parsed.context.actor}`);
+	createLogger({
+		owner: parsed.context.owner,
+		repo: parsed.context.repo,
+		issue_number: parsed.context.issueNumber,
+		actor: parsed.context.actor,
+	}).info('pr_review_comment_received');
 }
 
 // Schedule events are handled by the GitHub Action directly - Bonk webhook just logs
 async function handleScheduleEvent(payload: ScheduleEventPayload): Promise<void> {
 	const parsed = parseScheduleEvent(payload);
 	if (!parsed) {
-		console.error('Invalid schedule event payload');
+		log.error('schedule_event_invalid');
 		return;
 	}
 
-	const logPrefix = `[${parsed.owner}/${parsed.repo}]`;
-	console.info(`${logPrefix} Received schedule event: ${parsed.schedule}`);
+	createLogger({ owner: parsed.owner, repo: parsed.repo }).info('schedule_event_received', { schedule: parsed.schedule });
 }
 
 async function handleIssuesEvent(payload: IssuesEvent): Promise<void> {
 	const parsed = parseIssuesEvent(payload);
 	if (!parsed) return;
 
-	const logPrefix = `[${parsed.context.owner}/${parsed.context.repo}#${parsed.context.issueNumber}]`;
-	console.info(`${logPrefix} Issues event (${payload.action}) from ${parsed.context.actor}`);
+	createLogger({
+		owner: parsed.context.owner,
+		repo: parsed.context.repo,
+		issue_number: parsed.context.issueNumber,
+		actor: parsed.context.actor,
+	}).info('issues_event_received', { action: payload.action });
 }
 
 // Handle workflow_dispatch events for manual workflow triggers.
 async function handleWorkflowDispatchEvent(payload: WorkflowDispatchPayload): Promise<void> {
 	const parsed = parseWorkflowDispatchEvent(payload);
 	if (!parsed) {
-		console.error('Invalid workflow_dispatch event payload');
+		log.error('workflow_dispatch_invalid');
 		return;
 	}
 
-	const logPrefix = `[${parsed.owner}/${parsed.repo}]`;
-	console.info(`${logPrefix} Received workflow_dispatch event from ${parsed.sender}`);
+	createLogger({ owner: parsed.owner, repo: parsed.repo, actor: parsed.sender }).info('workflow_dispatch_received');
 }

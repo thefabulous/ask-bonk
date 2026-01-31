@@ -6,6 +6,7 @@ import { Webhooks } from '@octokit/webhooks';
 import { graphql } from '@octokit/graphql';
 import type { Env, GitHubIssue, GitHubPullRequest, IssueQueryResponse, PullRequestQueryResponse } from './types';
 import { withRetry } from './retry';
+import { createLogger } from './log';
 
 const ResilientOctokit = Octokit.plugin(retry, throttling);
 
@@ -137,11 +138,12 @@ export async function createReaction(
 	content: ReactionContent,
 	targetType: ReactionTarget,
 ): Promise<void> {
+	const reactionLog = createLogger({ owner, repo });
 	try {
 		switch (targetType) {
 			case 'pull_request_review':
 				// PR reviews (the overall review submission) don't support reactions via REST API
-				console.info(`Skipping reaction for pull_request_review ${targetId} - not supported by GitHub API`);
+				reactionLog.info('reaction_skipped_unsupported', { target_type: targetType, target_id: targetId });
 				return;
 			case 'pull_request_review_comment':
 				await octokit.reactions.createForPullRequestReviewComment({
@@ -169,7 +171,7 @@ export async function createReaction(
 				break;
 		}
 	} catch (error) {
-		console.error(`Failed to create reaction for ${targetType} ${targetId}:`, error);
+		reactionLog.errorWithException('reaction_create_failed', error, { target_type: targetType, target_id: targetId });
 	}
 }
 
@@ -482,12 +484,12 @@ export async function findWorkflowRun(
 	afterTimestamp: string,
 ): Promise<WorkflowRunInfo | null> {
 	const delays = [0, 10_000, 20_000, 30_000];
-	const logPrefix = `[${owner}/${repo}]`;
+	const workflowLog = createLogger({ owner, repo });
 
 	for (let i = 0; i < delays.length; i++) {
 		const delay = delays[i];
 		if (delay > 0) {
-			console.info(`${logPrefix} Waiting ${delay / 1000}s before polling for workflow run (attempt ${i + 1}/${delays.length})`);
+			workflowLog.info('workflow_poll_waiting', { delay_ms: delay, attempt: i + 1, max_attempts: delays.length });
 			await sleep(delay);
 		}
 
@@ -504,7 +506,7 @@ export async function findWorkflowRun(
 			const run = response.data.workflow_runs.find((r) => r.triggering_actor?.login === triggeringActor);
 
 			if (run) {
-				console.info(`${logPrefix} Found workflow run ${run.id} (status: ${run.status})`);
+				workflowLog.info('workflow_run_found', { run_id: run.id, status: run.status });
 				return {
 					id: run.id,
 					url: run.html_url,
@@ -513,13 +515,13 @@ export async function findWorkflowRun(
 				};
 			}
 
-			console.info(`${logPrefix} No matching workflow run found yet (attempt ${i + 1}/${delays.length})`);
+			workflowLog.info('workflow_run_not_found', { attempt: i + 1, max_attempts: delays.length });
 		} catch (error) {
-			console.error(`${logPrefix} Error polling for workflow run:`, error);
+			workflowLog.errorWithException('workflow_poll_error', error, { attempt: i + 1, max_attempts: delays.length });
 		}
 	}
 
-	console.warn(`${logPrefix} Could not find workflow run after ${delays.length} attempts`);
+	workflowLog.warn('workflow_run_not_found_exhausted', { attempts: delays.length });
 	return null;
 }
 

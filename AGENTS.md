@@ -24,6 +24,7 @@ GitHub code review bot built on Cloudflare Workers + Hono + TypeScript. Use `bun
 - `src/events.ts` - Webhook event parsing and response formatting
 - `src/types.ts` - Type definitions (Env, request/response types, GitHub types)
 - `src/oidc.ts` - OIDC token validation and exchange for GitHub Actions
+- `src/log.ts` - Structured logging utility (JSON output, context propagation)
 
 ## Commands
 
@@ -64,7 +65,6 @@ CI uses `bun install --frozen-lockfile` which fails if lockfile doesn't match.
 ### Imports
 - Group by: external packages first, then local modules
 - Use `type` imports for types only: `import type { Env } from './types'`
-- No trailing semicolons on import lines
 
 ### Types
 - Strict mode enabled (`tsconfig.json`)
@@ -75,13 +75,8 @@ CI uses `bun install --frozen-lockfile` which fails if lockfile doesn't match.
 ### Naming
 - `camelCase` for functions/variables
 - `PascalCase` for types/classes/interfaces
+- `snake_case` for log event names and log field names
 - Prefix interfaces with descriptive nouns (e.g., `EventContext`, `TrackWorkflowRequest`)
-
-### Error Handling
-- Use try/catch for async operations
-- Return early on validation failures
-- Log errors with context prefix: `[owner/repo#issue]`
-- For API handlers: return JSON errors with appropriate HTTP status codes
 
 ### Code Organization
 - Keep related code together; avoid splitting across too many files
@@ -89,6 +84,51 @@ CI uses `bun install --frozen-lockfile` which fails if lockfile doesn't match.
 - External API functions stay in their respective files (`github.ts`, `sandbox.ts`, `oidc.ts`)
 - Comments explain "why", not "what"; skip for short (<10 line) functions
 - Prioritize comments for I/O boundaries, external system orchestration, and stateful code
+
+## Logging
+
+Use structured JSON logging via `src/log.ts`. **Do NOT use raw `console.log/info/error`**.
+
+### Usage
+```typescript
+import { createLogger, log } from './log';
+
+// Create logger with context (preferred for request handlers)
+const requestLog = createLogger({ request_id: ulid(), owner, repo, issue_number });
+requestLog.info('webhook_completed', { event_type: 'issue_comment', duration_ms: 42 });
+
+// Child loggers inherit context
+const sessionLog = requestLog.child({ session_id: 'abc123' });
+
+// Error logging with exception details
+requestLog.errorWithException('operation_failed', error, { additional: 'context' });
+
+// Default logger for cases without request context
+log.error('startup_failed', { reason: 'missing config' });
+```
+
+### Event Naming
+- Use `snake_case`: `webhook_received`, `run_tracking_started`, `sandbox_clone_failed`
+- Use past tense for completed actions: `track_completed`, `installation_deleted`
+- Prefix with domain when helpful: `sandbox_prompt_failed`, `github_rate_limited`
+
+### Required Context Fields
+- `request_id` - ULID generated at request entry point for correlation
+- `owner`, `repo` - Always include when available
+- `issue_number`, `run_id`, `actor` - Include when relevant
+- `duration_ms` - Include in completion/error logs (wide event pattern)
+
+### Security
+- `sanitizeSecrets()` automatically redacts credentials from error messages
+- Never log tokens, API keys, or sensitive data directly
+- Error messages from git operations may contain URLs with tokens - always use `errorWithException()`
+
+## Error Handling
+
+- Use try/catch for async operations
+- Return early on validation failures
+- Use `errorWithException()` for errors - it sanitizes and formats automatically
+- For API handlers: return JSON errors with appropriate HTTP status codes
 
 ## Testing
 
@@ -106,7 +146,6 @@ CI uses `bun install --frozen-lockfile` which fails if lockfile doesn't match.
 - String equality checks with hardcoded values unrelated to implementation
 - "Documentation" tests that don't call real functions
 - Tests that stub/mock everything such that no real code paths are tested
-- Unit tests that simply test language features (e.g., object spread)
 
 ### Test Philosophy
 - Bias towards fewer tests, focusing on integration tests
@@ -121,13 +160,7 @@ CI uses `bun install --frozen-lockfile` which fails if lockfile doesn't match.
 
 ### Dependencies
 - Minimize new dependencies unless necessary
-- Key packages: Hono (routing), Octokit (GitHub API), agents (Durable Objects)
-
-### Logging
-- Use `console.info()` for normal operations
-- Use `console.error()` for errors
-- Use `console.warn()` for warnings
-- Always include context prefix: `[owner/repo]` or `[owner/repo#issue]`
+- Key packages: Hono (routing), Octokit (GitHub API), agents (Durable Objects), ulid
 
 ### API Patterns
 - Hono routes grouped by feature (auth, api/github, ask, webhooks)

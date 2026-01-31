@@ -10,6 +10,7 @@ import {
 	findOpenPR,
 } from "./github";
 import workflowTemplate from "../cli/templates/bonk.yml.hbs";
+import { createLogger } from "./log";
 
 const WORKFLOW_FILE_PATH = ".github/workflows/bonk.yml";
 const WORKFLOW_BRANCH = "bonk/add-workflow-file";
@@ -38,15 +39,15 @@ export async function ensureWorkflowFile(
 	issueNumber: number,
 	defaultBranch: string
 ): Promise<SetupResult> {
-	const logPrefix = `[${owner}/${repo}#${issueNumber}]`;
+	const workflowLog = createLogger({ owner, repo, issue_number: issueNumber });
 	const hasWorkflow = await fileExists(octokit, owner, repo, WORKFLOW_FILE_PATH);
 
 	if (hasWorkflow) {
-		console.info(`${logPrefix} Workflow file exists`);
+		workflowLog.info('workflow_file_exists');
 		return { exists: true };
 	}
 
-	console.info(`${logPrefix} Workflow file not found, creating PR`);
+	workflowLog.info('workflow_file_missing_creating_pr');
 	return await createWorkflowPR(octokit, owner, repo, issueNumber, defaultBranch);
 }
 
