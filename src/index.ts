@@ -47,6 +47,7 @@ import {
   queryAnalyticsEngine,
   renderBarChart,
   eventsPerRepoQuery,
+  errorsByRepoQuery,
 } from "./metrics";
 import { log, createLogger } from "./log";
 
@@ -114,13 +115,29 @@ app.get("/stats", async (c) => {
     }
 
     const chart = renderBarChart(
-      data as { repo: string; event_type: string; event_count: number }[],
-      "Events per repo (last 30d)",
+      data as { repo: string; event_count: number }[],
+      "Webhook events per repo (last 30d)",
     );
     return c.text(chart);
   } catch (error) {
     log.errorWithException("stats_query_failed", error);
     return c.json({ error: "Failed to query stats" }, 500);
+  }
+});
+
+// Public errors endpoint - shows errors by repo (last 24h)
+app.get("/errors", async (c) => {
+  const { CLOUDFLARE_ACCOUNT_ID, ANALYTICS_TOKEN } = c.env;
+  if (!CLOUDFLARE_ACCOUNT_ID || !ANALYTICS_TOKEN) {
+    return c.json({ error: "Errors endpoint is not configured" }, 500);
+  }
+
+  try {
+    const data = await queryAnalyticsEngine(c.env, errorsByRepoQuery);
+    return c.json({ data });
+  } catch (error) {
+    log.errorWithException("errors_query_failed", error);
+    return c.json({ error: "Failed to query errors" }, 500);
   }
 });
 

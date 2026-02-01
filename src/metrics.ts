@@ -1,5 +1,6 @@
 import type { Env } from "./types";
 import eventsPerRepoQuery from "../ae_queries/events_per_repo.sql";
+import errorsByRepoQuery from "../ae_queries/errors_by_repo.sql";
 
 // Event types for categorizing metrics
 export type EventType =
@@ -61,7 +62,6 @@ export function emitMetric(env: Env, event: MetricEvent): void {
 // Row shape returned by events_per_repo.sql query
 interface EventsPerRepoRow {
   repo: string;
-  event_type: string;
   event_count: number;
 }
 
@@ -109,14 +109,12 @@ export function renderBarChart(
   if (!data.length) return "No data available";
 
   const maxCount = Math.max(...data.map((d) => d.event_count));
-  const maxLabel = Math.max(
-    ...data.map((d) => `${d.repo} (${d.event_type})`.length),
-  );
+  const maxLabel = Math.max(...data.map((d) => d.repo.length));
   const barWidth = 40;
 
   const header = `${title}\n${"─".repeat(maxLabel + barWidth + 10)}\n`;
   const rows = data.map((row) => {
-    const label = `${row.repo} (${row.event_type})`.padEnd(maxLabel);
+    const label = row.repo.padEnd(maxLabel);
     const barLen =
       maxCount > 0 ? Math.round((row.event_count / maxCount) * barWidth) : 0;
     const bar = "█".repeat(barLen);
@@ -126,5 +124,5 @@ export function renderBarChart(
   return header + rows.join("\n");
 }
 
-// Bundled SQL query for events per repo
-export { eventsPerRepoQuery };
+// Bundled SQL queries
+export { eventsPerRepoQuery, errorsByRepoQuery };
