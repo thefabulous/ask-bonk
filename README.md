@@ -94,6 +94,19 @@ Mention `@ask-bonk` or `/bonk` in any issue or PR comment.
           model: anthropic/claude-sonnet-4-20250514
 ```
 
+You can also configure Bonk to use [Cloudflare AI Gateway](https://developers.cloudflare.com/ai-gateway/):
+
+```yaml
+      - name: Run Bonk
+        uses: ask-bonk/ask-bonk/github@main
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_GATEWAY_ID: ${{ secrets.CLOUDFLARE_GATEWAY_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        with:
+          model: cloudflare-ai-gateway/anthropic/claude-opus-4-5
+```
+
 ## GitHub Workflows
 
 Mention the bot in any issue or PR:
