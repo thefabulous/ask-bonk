@@ -5,7 +5,7 @@ SELECT
 FROM bonk_events
 WHERE timestamp > NOW() - INTERVAL '30' DAY
   AND blob1 = 'webhook'
-  AND blob2 IN ('issue_comment', 'pull_request_review_comment', 'issues')
+  AND blob2 IN ('issue_comment', 'pull_request_review_comment')
   AND blob4 != ''
 GROUP BY actor
 ORDER BY event_count DESC
