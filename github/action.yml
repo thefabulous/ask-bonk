@@ -32,6 +32,11 @@ inputs:
     required: false
     default: "https://ask-bonk.silverlock.workers.dev/auth"
 
+  forks:
+    description: "Handle PRs from forks (runs in comment-only mode). Set to 'false' to skip fork PRs entirely."
+    required: false
+    default: "true"
+
   opencode_dev:
     description: "Install OpenCode from dev branch instead of latest release"
     required: false
@@ -50,7 +55,7 @@ runs:
         MENTIONS: ${{ inputs.mentions }}
       run: |
         BODY=""
-        
+
         case "$EVENT_NAME" in
           issue_comment|pull_request_review_comment)
             BODY="$COMMENT_BODY"
@@ -68,9 +73,9 @@ runs:
             exit 0
             ;;
         esac
-        
+
         IFS=',' read -ra MENTION_ARRAY <<< "$MENTIONS"
-        
+
         for mention in "${MENTION_ARRAY[@]}"; do
           mention="${mention#"${mention%%[![:space:]]*}"}"
           mention="${mention%"${mention##*[![:space:]]}"}"
@@ -80,7 +85,7 @@ runs:
             exit 0
           fi
         done
-        
+
         echo "No matching mention found in comment"
         echo "skip=true" >> $GITHUB_OUTPUT
 
@@ -258,19 +263,19 @@ runs:
         # Get GitHub Actions OIDC token
         OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
           "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=opencode-github-action" | jq -r '.value')
-        
+
         # Exchange for GitHub App installation token via Bonk's OIDC endpoint
         RESPONSE=$(curl -s -X POST "${{ inputs.oidc_base_url }}/exchange_github_app_token" \
           -H "Authorization: Bearer $OIDC_TOKEN" \
           -H "Content-Type: application/json")
-        
+
         APP_TOKEN=$(echo "$RESPONSE" | jq -r '.token // empty')
-        
+
         if [ -z "$APP_TOKEN" ]; then
           echo "::error::Failed to exchange OIDC token: $(echo "$RESPONSE" | jq -r '.error // "Unknown error"')"
           exit 1
         fi
-        
+
         # Mask the token in logs and export for subsequent steps
         echo "::add-mask::$APP_TOKEN"
         echo "GH_TOKEN=$APP_TOKEN" >> $GITHUB_ENV
@@ -294,8 +299,25 @@ runs:
         ISSUE_ID: ${{ github.event.issue.id }}
       run: bun run ${{ github.action_path }}/script/track.ts
 
-    - name: Run opencode
+    - name: Build prompt
       if: steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true'
+      id: prompt
+      shell: bash
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        PR_BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
+        REPOSITORY: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.issue.pull_request.url && github.event.issue.number || '' }}
+        GH_TOKEN: ${{ github.token }}
+        USER_PROMPT: ${{ inputs.prompt }}
+        ACTION_PATH: ${{ github.action_path }}
+        FORKS: ${{ inputs.forks }}
+        ISSUE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+      run: bun run ${{ github.action_path }}/script/prompt.ts
+
+    - name: Run opencode
+      if: steps.mentions.outputs.skip != 'true' && steps.setup.outputs.skip != 'true' && steps.prompt.outputs.skip != 'true'
       id: opencode
       shell: bash
       run: |
@@ -307,7 +329,7 @@ runs:
       env:
         MODEL: ${{ inputs.model }}
         AGENT: ${{ inputs.agent }}
-        PROMPT: ${{ inputs.prompt }}
+        PROMPT: ${{ steps.prompt.outputs.value }}
         SHARE: false
         MENTIONS: ${{ inputs.mentions }}
         OIDC_BASE_URL: ${{ inputs.oidc_base_url }}
