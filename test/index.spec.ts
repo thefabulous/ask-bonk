@@ -4,6 +4,7 @@ import {
   parseIssueCommentEvent,
   parsePRReviewCommentEvent,
   parsePRReviewEvent,
+  parsePullRequestEvent,
   parseScheduleEvent,
   parseIssuesEvent,
   parseWorkflowDispatchEvent,
@@ -21,6 +22,7 @@ import { sanitizeSecrets } from "../src/log";
 import type { Env } from "../src/types";
 import type {
   IssueCommentEvent,
+  PullRequestEvent,
   PullRequestReviewCommentEvent,
   PullRequestReviewEvent,
 } from "@octokit/webhooks-types";
@@ -378,6 +380,77 @@ describe("Issues Event Parsing", () => {
 
     const result = parseIssuesEvent(payload);
     expect(result).toBeNull();
+  });
+});
+
+describe("Pull Request Event Parsing", () => {
+  const basePRPayload = {
+    action: "opened",
+    pull_request: {
+      number: 55,
+      head: {
+        ref: "feature-branch",
+        sha: "abc123",
+        repo: { full_name: "test-owner/test-repo" },
+      },
+      base: {
+        repo: { full_name: "test-owner/test-repo" },
+      },
+    },
+    repository: {
+      name: "test-repo",
+      owner: { login: "test-owner" },
+      private: false,
+      default_branch: "main",
+    },
+    sender: { login: "testuser" },
+    installation: { id: 12345 },
+  } as unknown as PullRequestEvent;
+
+  it("parses pull_request:opened event", () => {
+    const result = parsePullRequestEvent(basePRPayload);
+
+    expect(result).not.toBeNull();
+    expect(result.context.owner).toBe("test-owner");
+    expect(result.context.repo).toBe("test-repo");
+    expect(result.context.issueNumber).toBe(55);
+    expect(result.context.actor).toBe("testuser");
+    expect(result.context.isPullRequest).toBe(true);
+    expect(result.context.headBranch).toBe("feature-branch");
+    expect(result.context.headSha).toBe("abc123");
+    expect(result.action).toBe("opened");
+  });
+
+  it("passes through all actions without filtering", () => {
+    const syncPayload = {
+      ...basePRPayload,
+      action: "synchronize",
+    } as unknown as PullRequestEvent;
+
+    const result = parsePullRequestEvent(syncPayload);
+    expect(result.action).toBe("synchronize");
+    expect(result.context.issueNumber).toBe(55);
+  });
+
+  it("sets isFork true for fork PRs", () => {
+    const forkPayload = {
+      ...basePRPayload,
+      pull_request: {
+        ...basePRPayload.pull_request,
+        head: {
+          ...(basePRPayload as any).pull_request.head,
+          repo: { full_name: "forked-owner/test-repo" },
+        },
+      },
+    } as unknown as PullRequestEvent;
+
+    const result = parsePullRequestEvent(forkPayload);
+    expect(result.context.isFork).toBe(true);
+  });
+
+  it("sets isFork false for same-repo PRs", () => {
+    const result = parsePullRequestEvent(basePRPayload);
+    expect(result.context.isFork).toBe(false);
   });
 });
 

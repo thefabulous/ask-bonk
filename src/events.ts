@@ -1,6 +1,7 @@
 import type {
   IssueCommentEvent,
   IssuesEvent,
+  PullRequestEvent,
   PullRequestReviewCommentEvent,
   PullRequestReviewEvent,
 } from "@octokit/webhooks-types";
@@ -191,6 +192,35 @@ export function parseIssuesEvent(payload: IssuesEvent): {
 
   log.info("issues_event_unsupported_action", { action: payload.action });
   return null;
+}
+
+// Parse pull_request events - all actions pass through (no filtering).
+// Action filtering is the workflow's responsibility.
+export function parsePullRequestEvent(payload: PullRequestEvent): {
+  context: Omit<EventContext, "env">;
+  action: string;
+} {
+  const headRepo = payload.pull_request.head.repo?.full_name;
+  const baseRepo = payload.pull_request.base.repo?.full_name;
+  // null head repo means the fork was deleted — still a fork PR
+  const isFork = !headRepo || headRepo !== baseRepo;
+
+  return {
+    context: {
+      owner: payload.repository.owner.login,
+      repo: payload.repository.name,
+      issueNumber: payload.pull_request.number,
+      commentId: 0,
+      actor: payload.sender.login,
+      isPullRequest: true,
+      isPrivate: payload.repository.private,
+      defaultBranch: payload.repository.default_branch,
+      headBranch: payload.pull_request.head.ref,
+      headSha: payload.pull_request.head.sha,
+      isFork,
+    },
+    action: payload.action,
+  };
 }
 
 export function getModel(env: Env): { providerID: string; modelID: string } {

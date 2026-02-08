@@ -4,7 +4,9 @@ import { ulid } from "ulid";
 import type {
   IssueCommentEvent,
   IssuesEvent,
+  PullRequestEvent,
   PullRequestReviewCommentEvent,
+  PullRequestReviewEvent,
 } from "@octokit/webhooks-types";
 import type {
   Env,
@@ -26,6 +28,8 @@ import {
   parseIssueCommentEvent,
   parseIssuesEvent,
   parsePRReviewCommentEvent,
+  parsePRReviewEvent,
+  parsePullRequestEvent,
   parseScheduleEvent,
   parseWorkflowDispatchEvent,
 } from "./events";
@@ -69,6 +73,8 @@ function isAllowedOrg(owner: string, env: Env): boolean {
 const USER_EVENTS = [
   "issue_comment",
   "pull_request_review_comment",
+  "pull_request_review",
+  "pull_request",
   "issues",
 ] as const;
 const REPO_EVENTS = ["schedule", "workflow_dispatch"] as const;
@@ -820,6 +826,12 @@ async function handleUserEvent(
     case "pull_request_review_comment":
       await handlePRReviewComment(payload as PullRequestReviewCommentEvent);
       break;
+    case "pull_request_review":
+      await handlePRReviewEvent(payload as PullRequestReviewEvent);
+      break;
+    case "pull_request":
+      await handlePullRequestEvent(payload as PullRequestEvent);
+      break;
     case "issues":
       await handleIssuesEvent(payload as IssuesEvent);
       break;
@@ -914,6 +926,33 @@ async function handlePRReviewComment(
     issue_number: parsed.context.issueNumber,
     actor: parsed.context.actor,
   }).info("pr_review_comment_received");
+}
+
+async function handlePRReviewEvent(
+  payload: PullRequestReviewEvent,
+): Promise<void> {
+  const parsed = parsePRReviewEvent(payload);
+  if (!parsed) return;
+
+  createLogger({
+    owner: parsed.context.owner,
+    repo: parsed.context.repo,
+    issue_number: parsed.context.issueNumber,
+    actor: parsed.context.actor,
+  }).info("pr_review_received");
+}
+
+async function handlePullRequestEvent(
+  payload: PullRequestEvent,
+): Promise<void> {
+  const parsed = parsePullRequestEvent(payload);
+
+  createLogger({
+    owner: parsed.context.owner,
+    repo: parsed.context.repo,
+    issue_number: parsed.context.issueNumber,
+    actor: parsed.context.actor,
+  }).info("pull_request_received", { action: parsed.action });
 }
 
 // Schedule events are handled by the GitHub Action directly - Bonk webhook just logs

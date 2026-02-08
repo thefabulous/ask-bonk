@@ -20,6 +20,9 @@ export interface Context {
   repo: Repo;
   issue: Issue | null;
   comment: Comment | null;
+  // Timestamp of the triggering event (comment, issue, or PR creation).
+  // Falls back to current time if no timestamp env var is available.
+  createdAt: string;
   eventName: string;
   runId: number;
   runUrl: string;
@@ -68,6 +71,7 @@ export function getContext(): Context {
           createdAt: createdAt || new Date().toISOString(),
         }
       : null,
+    createdAt: createdAt || new Date().toISOString(),
     eventName: process.env.EVENT_NAME || process.env.GITHUB_EVENT_NAME || "",
     runId: parseInt(runId, 10),
     runUrl: `${serverUrl}/${repository}/actions/runs/${runId}`,

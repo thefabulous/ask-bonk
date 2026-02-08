@@ -18,8 +18,8 @@ interface ForkDetectionResult {
 }
 
 // Detect whether the current event is from a fork PR.
-// For pull_request_review_comment and pull_request_review events, head/base repo
-// are available directly in the event payload via env vars.
+// For pull_request, pull_request_review_comment, and pull_request_review events,
+// head/base repo are available directly in the event payload via env vars.
 // For issue_comment events on PRs, we fetch PR data via the GitHub API since the
 // issue_comment payload doesn't include full PR repo info.
 async function detectFork(): Promise<ForkDetectionResult> {
@@ -31,6 +31,7 @@ async function detectFork(): Promise<ForkDetectionResult> {
   const ghToken = process.env.GH_TOKEN;
 
   switch (eventName) {
+    case "pull_request":
     case "pull_request_review_comment":
     case "pull_request_review":
       if (headRepo && baseRepo) {
@@ -42,12 +43,15 @@ async function detectFork(): Promise<ForkDetectionResult> {
       // Only check if this is a comment on a PR (PR_NUMBER is set)
       if (!prNumber || !repository || !ghToken) return { isFork: false };
       try {
-        const resp = await fetch(`https://api.github.com/repos/${repository}/pulls/${prNumber}`, {
-          headers: {
-            Authorization: `Bearer ${ghToken}`,
-            Accept: "application/vnd.github+json",
+        const resp = await fetch(
+          `https://api.github.com/repos/${repository}/pulls/${prNumber}`,
+          {
+            headers: {
+              Authorization: `Bearer ${ghToken}`,
+              Accept: "application/vnd.github+json",
+            },
           },
-        });
+        );
         if (!resp.ok) return { isFork: false };
         const pr = (await resp.json()) as {
           head?: { repo?: { full_name?: string }; sha?: string };
@@ -78,7 +82,9 @@ async function commentForkSkipped(): Promise<void> {
   const issueNumber = process.env.ISSUE_NUMBER || process.env.PR_NUMBER;
 
   if (!repository || !ghToken || !issueNumber) {
-    core.warning("Cannot post fork skip comment: missing REPOSITORY, GH_TOKEN, or issue number");
+    core.warning(
+      "Cannot post fork skip comment: missing REPOSITORY, GH_TOKEN, or issue number",
+    );
     return;
   }
 
@@ -124,7 +130,9 @@ async function commentForkSkipped(): Promise<void> {
   );
 
   if (!resp.ok) {
-    core.warning(`Failed to post fork skip comment: ${resp.status} ${resp.statusText}`);
+    core.warning(
+      `Failed to post fork skip comment: ${resp.status} ${resp.statusText}`,
+    );
   }
 }
 
@@ -203,10 +211,16 @@ async function main() {
     const prNumber = resolvePRNumber();
     const repository = process.env.REPOSITORY || "";
     const [owner = "", repo = ""] = repository.split("/");
-    const headSha = await resolveHeadSha(prNumber, repository, detection.headSha);
+    const headSha = await resolveHeadSha(
+      prNumber,
+      repository,
+      detection.headSha,
+    );
 
     if (!prNumber || !owner || !repo) {
-      core.setFailed("Cannot determine PR number or repository for fork guidance");
+      core.setFailed(
+        "Cannot determine PR number or repository for fork guidance",
+      );
       return;
     }
 

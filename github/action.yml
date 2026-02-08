@@ -63,7 +63,7 @@ runs:
           pull_request_review)
             BODY="$REVIEW_BODY"
             ;;
-          issues|workflow_dispatch|schedule)
+          issues|pull_request|workflow_dispatch|schedule)
             echo "skip=false" >> $GITHUB_OUTPUT
             exit 0
             ;;
@@ -315,12 +315,12 @@ runs:
         GITHUB_SERVER_URL: ${{ github.server_url }}
         GITHUB_REPOSITORY: ${{ github.repository }}
         EVENT_NAME: ${{ github.event_name }}
-        ISSUE_NUMBER: ${{ github.event.issue.number }}
+        ISSUE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
         COMMENT_ID: ${{ github.event.comment.id }}
         COMMENT_CREATED_AT: ${{ github.event.comment.created_at }}
-        ISSUE_CREATED_AT: ${{ github.event.issue.created_at }}
-        ISSUE_ID: ${{ github.event.issue.id }}
+        ISSUE_CREATED_AT: ${{ github.event.issue.created_at || github.event.pull_request.created_at }}
+        ISSUE_ID: ${{ github.event.issue.id || github.event.pull_request.id }}
       run: bun run ${{ github.action_path }}/script/track.ts
 
     - name: Build prompt
@@ -332,7 +332,7 @@ runs:
         PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         PR_BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
         REPOSITORY: ${{ github.repository }}
-        PR_NUMBER: ${{ github.event.issue.pull_request.url && github.event.issue.number || '' }}
+        PR_NUMBER: ${{ github.event.issue.pull_request.url && github.event.issue.number || github.event.pull_request.number || '' }}
         GH_TOKEN: ${{ github.token }}
         USER_PROMPT: ${{ inputs.prompt }}
         ACTION_PATH: ${{ github.action_path }}

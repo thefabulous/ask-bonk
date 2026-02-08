@@ -246,7 +246,7 @@ export interface TrackWorkflowRequest {
   // For creating reactions - set based on event type
   comment_id?: number; // For issue_comment events
   review_comment_id?: number; // For pull_request_review_comment events
-  issue_id?: number; // For issues events (react to the issue itself)
+  issue_id?: number; // For issues events — the issue *number* (not database ID) for reactions
 }
 
 // Request to finalize a tracked workflow run (PUT /api/github/track)
