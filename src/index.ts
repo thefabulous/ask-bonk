@@ -16,7 +16,6 @@ import type {
   SetupWorkflowRequest,
 } from "./types";
 import {
-  createOctokit,
   createWebhooks,
   verifyWebhook,
   createReaction,
@@ -40,6 +39,7 @@ import {
   handleExchangeTokenForRepo,
   handleExchangeTokenWithPAT,
   getInstallationId,
+  createOctokitForRepo,
   extractBearerToken,
   validateOIDCAndExtractRepo,
 } from "./oidc";
@@ -223,11 +223,14 @@ ask.post("/", async (c) => {
       404,
     );
   }
-  const installationId = installationResult.value;
+  const { id: installationId, source: installationSource } =
+    installationResult.value;
 
   const streamResult = await runAsk(c.env, installationId, body);
   if (streamResult.isErr()) {
     askLog.errorWithException("ask_failed", streamResult.error, {
+      installation_id: installationId,
+      installation_source: installationSource,
       duration_ms: Date.now() - startTime,
     });
     return c.json({ error: streamResult.error.message }, 500);
@@ -382,10 +385,19 @@ apiGithub.post("/setup", async (c) => {
       404,
     );
   }
-  const installationId = installationResult.value;
+  let { id: installationId, source: installationSource } =
+    installationResult.value;
 
   try {
-    const octokit = await createOctokit(c.env, installationId);
+    const { octokit, installation } = await createOctokitForRepo(
+      c.env,
+      body.owner,
+      body.repo,
+      installationResult.value,
+    );
+    installationId = installation.id;
+    installationSource = installation.source;
+
     const result = await ensureWorkflowFile(
       octokit,
       body.owner,
@@ -395,6 +407,8 @@ apiGithub.post("/setup", async (c) => {
     );
 
     setupLog.info("setup_completed", {
+      installation_id: installationId,
+      installation_source: installationSource,
       exists: result.exists,
       pr_url: result.prUrl ?? null,
       duration_ms: Date.now() - startTime,
@@ -409,6 +423,8 @@ apiGithub.post("/setup", async (c) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     setupLog.errorWithException("setup_failed", error, {
+      installation_id: installationId,
+      installation_source: installationSource,
       duration_ms: Date.now() - startTime,
     });
     emitMetric(c.env, {
@@ -501,13 +517,21 @@ apiGithub.post("/track", async (c) => {
       404,
     );
   }
-  const installationId = installationResult.value;
+  let { id: installationId, source: installationSource } =
+    installationResult.value;
 
   try {
     // Create reaction if comment/issue ID provided
     const reactionTarget = getReactionTarget(body);
     if (reactionTarget) {
-      const octokit = await createOctokit(c.env, installationId);
+      const { octokit, installation } = await createOctokitForRepo(
+        c.env,
+        body.owner,
+        body.repo,
+        { id: installationId, source: installationSource },
+      );
+      installationId = installation.id;
+      installationSource = installation.source;
       await createReaction(
         octokit,
         body.owner,
@@ -527,10 +551,12 @@ apiGithub.post("/track", async (c) => {
       c.env.REPO_AGENT,
       `${body.owner}/${body.repo}`,
     );
-    await agent.setInstallationId(installationId);
+    await agent.setInstallationId(installationId, installationSource);
     await agent.trackRun(body.run_id, body.run_url, body.issue_number);
 
     trackLog.info("track_completed", {
+      installation_id: installationId,
+      installation_source: installationSource,
       run_url: body.run_url,
       duration_ms: Date.now() - startTime,
     });
@@ -546,6 +572,8 @@ apiGithub.post("/track", async (c) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     trackLog.errorWithException("track_failed", error, {
+      installation_id: installationId,
+      installation_source: installationSource,
       duration_ms: Date.now() - startTime,
     });
     emitMetric(c.env, {
@@ -629,7 +657,8 @@ apiGithub.put("/track", async (c) => {
       404,
     );
   }
-  const installationId = installationResult.value;
+  const { id: installationId, source: installationSource } =
+    installationResult.value;
 
   try {
     // Get RepoAgent and finalize
@@ -637,10 +666,12 @@ apiGithub.put("/track", async (c) => {
       c.env.REPO_AGENT,
       `${body.owner}/${body.repo}`,
     );
-    await agent.setInstallationId(installationId);
+    await agent.setInstallationId(installationId, installationSource);
     await agent.finalizeRun(body.run_id, body.status);
 
     finalizeLog.info("finalize_completed", {
+      installation_id: installationId,
+      installation_source: installationSource,
       status: body.status,
       duration_ms: Date.now() - startTime,
     });
@@ -655,6 +686,8 @@ apiGithub.put("/track", async (c) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     finalizeLog.errorWithException("finalize_failed", error, {
+      installation_id: installationId,
+      installation_source: installationSource,
       duration_ms: Date.now() - startTime,
     });
     emitMetric(c.env, {
