@@ -55,7 +55,7 @@ import {
   errorsByRepoQuery,
   eventsByActorQuery,
 } from "./metrics";
-import { log, createLogger } from "./log";
+import { log, createLogger, sanitizeSecrets } from "./log";
 
 export { Sandbox } from "@cloudflare/sandbox";
 export { RepoAgent };
@@ -390,7 +390,7 @@ apiGithub.post("/setup", async (c) => {
     });
     return c.json(result);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
+    const message = sanitizeSecrets(error instanceof Error ? error.message : "Unknown error");
     setupLog.errorWithException("setup_failed", error, {
       installation_id: installationId,
       installation_source: installationSource,
@@ -512,6 +512,7 @@ apiGithub.post("/track", async (c) => {
       body.run_url,
       body.issue_number,
       reactionTarget ? { id: reactionTarget.targetId, type: reactionTarget.targetType } : undefined,
+      actor,
     );
 
     trackLog.info("track_completed", {
@@ -530,7 +531,7 @@ apiGithub.post("/track", async (c) => {
     });
     return c.json({ ok: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
+    const message = sanitizeSecrets(error instanceof Error ? error.message : "Unknown error");
     trackLog.errorWithException("track_failed", error, {
       installation_id: installationId,
       installation_source: installationSource,
@@ -630,7 +631,7 @@ apiGithub.put("/track", async (c) => {
     });
     return c.json({ ok: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
+    const message = sanitizeSecrets(error instanceof Error ? error.message : "Unknown error");
     finalizeLog.errorWithException("finalize_failed", error, {
       installation_id: installationId,
       installation_source: installationSource,
@@ -772,7 +773,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
       eventSubtype: event.name,
       status: "error",
       actor: sender,
-      errorCode: error instanceof Error ? error.message.slice(0, 100) : "unknown",
+      errorCode: error instanceof Error ? sanitizeSecrets(error.message).slice(0, 100) : "unknown",
       issueNumber,
       isPrivate,
       isPullRequest,
@@ -997,6 +998,7 @@ async function handleWorkflowRunEvent(payload: WorkflowRunPayload, env: Env): Pr
       parsed.conclusion,
       parsed.runUrl,
       issueNumber,
+      parsed.triggeringActor,
     );
   } catch (error) {
     // Only emit a metric when the handler itself fails. The agent emits
@@ -1007,7 +1009,7 @@ async function handleWorkflowRunEvent(payload: WorkflowRunPayload, env: Env): Pr
       eventType: "webhook",
       eventSubtype: "workflow_run",
       status: "error",
-      errorCode: error instanceof Error ? error.message.slice(0, 100) : "unknown",
+      errorCode: error instanceof Error ? sanitizeSecrets(error.message).slice(0, 100) : "unknown",
       runId: parsed.runId,
       isPrivate: parsed.isPrivate,
     });

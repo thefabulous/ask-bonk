@@ -10,7 +10,8 @@ export type EventType =
   | "finalize"
   | "setup"
   | "installation"
-  | "failure_comment";
+  | "failure_comment"
+  | "failure_comment_error";
 
 // Status values for tracking outcomes
 export type EventStatus = "success" | "failure" | "error" | "skipped" | "cancelled";
