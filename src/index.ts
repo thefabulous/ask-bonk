@@ -101,9 +101,7 @@ const app = new Hono<{ Bindings: Env }>();
 
 app.get("/", (c) => c.redirect(GITHUB_REPO_URL, 302));
 app.get("/health", (c) => c.text("OK"));
-app.get("/version", (c) =>
-  c.json({ version: __VERSION__, commit: __COMMIT__ }),
-);
+app.get("/version", (c) => c.json({ version: __VERSION__, commit: __COMMIT__ }));
 
 // Stats endpoints - public dashboards for webhook analytics
 const stats = new Hono<{ Bindings: Env }>();
@@ -994,7 +992,12 @@ async function handleWorkflowRunEvent(payload: WorkflowRunPayload, env: Env): Pr
       env.REPO_AGENT,
       `${parsed.owner}/${parsed.repo}`,
     );
-    await agent.handleWorkflowRunCompleted(parsed.runId, parsed.conclusion, parsed.runUrl);
+    await agent.handleWorkflowRunCompleted(
+      parsed.runId,
+      parsed.conclusion,
+      parsed.runUrl,
+      issueNumber,
+    );
   } catch (error) {
     // Only emit a metric when the handler itself fails. The agent emits
     // its own metrics for tracked/untracked failures internally.
