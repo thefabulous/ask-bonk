@@ -29,7 +29,7 @@
     // ASK_SECRET: Set via wrangler secret for production
     // Empty or missing = /ask endpoint is disabled
     // Allowed orgs/users for GitHub App installation
-    "ALLOWED_ORGS": ["elithrar", "cloudflare", "ask-bonk"],
+    "ALLOWED_ORGS": ["thefabulous"],
   },
   // "containers": [
   // 	{
@@ -60,7 +60,7 @@
   "kv_namespaces": [
     {
       "binding": "APP_INSTALLATIONS",
-      "id": "03ef4765c3824caf9fb9b8ac31584f38",
+      "id": "46782abb12d54e0e9a88da860c922c80",
     },
   ],
   // Rate limiter for issues events from non-write users: 5 requests per minute
