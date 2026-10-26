@@ -24,8 +24,15 @@ jobs:
           node-version: '24'
           check-latest: true
 
+      - name: setup bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # Install exactly what bun.lock pins (package-lock.json is gitignored here).
+      # Without a lockfile, `npm install` re-resolved every ^range on each deploy.
       - name: Install Dependencies
-        run: npm install
+        run: bun install --frozen-lockfile
 
       - name: deploy worker
         uses: cloudflare/wrangler-action@v3
