@@ -35,6 +35,8 @@ jobs:
         with:
           # Exact version: the deploy must not float to a Bun release nobody tested.
           bun-version: 1.4.4
+          # Never restore a cached Bun binary (another job could have written that cache).
+          no-cache: true
 
       # Install exactly what bun.lock pins (package-lock.json is gitignored here).
       # Without a lockfile, `npm install` re-resolved every ^range on each deploy.
